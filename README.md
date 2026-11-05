@@ -1,0 +1,29 @@
+# 수협 차량운행 시연
+
+휴대폰 브라우저의 위치를 기록하는 소규모 교육용 시연입니다.
+
+## 배포
+
+1. 이 프로젝트를 GitHub 저장소에 올립니다.
+2. Settings → Pages → Build and deployment에서 Deploy from a branch, main, /docs를 선택합니다.
+3. https://hosang78.github.io/gps/ 에 접속합니다.
+4. 카카오맵을 쓸 기기는 지도 설정에서 도메인 등록을 마친 JavaScript 키를 입력합니다. 키는 현재 브라우저에 저장됩니다. 입력란을 비워 저장하면 OpenStreetMap으로 전환합니다.
+
+## 사용
+
+- 기본 모드는 가상 운행입니다. 차량을 고른 뒤 운행 시작과 종료를 누르면 이 브라우저에 운행일지가 저장됩니다.
+- 실측 GPS 모드는 배포된 사이트에서 참가자별 시연 코드를 사용합니다. 운행 중 5초마다 새 유효 좌표를 채택하고 30초마다 묶어 서버로 보냅니다. 종료할 때 남은 기록을 저장합니다.
+- 실측 운행 중 새로고침하면 같은 브라우저에서 이어서 사용합니다. 위치가 끊긴 구간은 선을 끊어 표시합니다. 운행을 마치면 종료를 누르세요.
+- 지도 연결에 실패해도 화면에 수신된 경로와 운행 기록은 계속 처리합니다.
+- 로컬에서 가상 모드를 보려면 프로젝트 폴더에서 `python -m http.server 8765 --directory docs` 실행 후 http://localhost:8765/ 에 접속합니다.
+
+## API와 데이터베이스
+
+- `api/schema.sql`의 테이블은 Neon 프로젝트 sh의 fleet-demo 브랜치, fleet_demo 데이터베이스 전용입니다.
+- `api/index.mjs`는 @neondatabase/serverless를 포함해 Node.js 24 대상 ESM으로 번들링한 뒤 index.mjs 이름으로 ZIP에 담아 Neon Function으로 배포합니다.
+- 서버 환경 변수 FLEET_DATABASE_URL에는 제한된 DB 계정의 연결 문자열을, FLEET_CODE_HASHES에는 참가자 코드의 SHA-256 해시를 쉼표로 구분해 넣습니다. 평문 코드는 참가자마다 따로 전달합니다.
+- `docs/config.js`에는 공개 API URL만 저장합니다. 카카오 키, 참가자 코드, DB 접속정보는 소스에 넣지 않습니다.
+
+## 즉시 미리보기
+
+압축을 푼 뒤 fleet_demo_preview.html을 열면 가상 차량 운행과 일지를 바로 체험할 수 있습니다. 배경 지도와 실측 연동은 배포용 화면에서 확인합니다.
