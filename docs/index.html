@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#0c416a">
+<meta name="theme-color" content="#0a1728">
 <title>수협 차량 운행기록</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="./style.css?v=3">
+<link rel="stylesheet" href="./style.css?v=4">
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script type="module" src="./app.js?v=3"></script>
+<script type="module" src="./app.js?v=4"></script>
 </head>
 <body>
 <header><div class="top"><div class="brand"><img src="./vehicles/symbol.webp" alt="수협"><div><small>수협 차량관리</small><h1>차량 운행기록</h1></div></div><button id="settings" class="outline">설정</button></div></header>
@@ -20,8 +20,8 @@
 <section class="panel ride" aria-labelledby="driveTitle">
 <div class="row"><h2 id="driveTitle">운행 현황</h2><span class="badge">실제 GPS</span></div>
 <div class="ride-summary">
-<img id="truck" src="./vehicles/cold-01.webp?v=2" alt="선택한 차량">
-<div><span id="state" class="status">운행 대기</span><div id="metrics">00:00 · 0.00 km</div><small id="freshness">운행을 시작하면 지도에 위치가 표시됩니다.</small></div>
+<div class="ride-info"><span id="state" class="status">운행 대기</span><strong id="vehicleName" class="vehicle-name">페라리 01</strong><div id="metrics">00:00 · 0.00 km</div><small id="freshness">운행을 시작하면 지도에 위치가 표시됩니다.</small></div>
+<span id="rideVisual" class="vehicle-visual ride-visual" data-vehicle="cold-01"><img id="truck" src="./vehicles/cold-01-photo.webp" alt="선택한 차량"></span>
 </div>
 <div id="mapWaiting" class="map-waiting">운행을 시작하면 현재 위치를 표시합니다.</div>
 <div id="map" aria-label="운행 경로 지도" hidden></div>

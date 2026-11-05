@@ -21,15 +21,23 @@ let code = sessionStorage.getItem(prefix+'code') || '';
 let cloudRecords = [], review, busy = false, syncTask, map, mapGeneration = 0;
 let watchId, sampler, syncTimer, clock, latest;
 const name = id => cars.find(([key]) => key === id)?.[1] || id;
-const image = (id, animated) => './vehicles/' + id + (animated ? '.gif' : '.webp') + (id === 'work-03' ? '' : '?v=2');
+const image = id => './vehicles/' + id + '-photo.webp';
 const formatTime = value => new Date(value).toLocaleString('ko-KR', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
 
-function vehiclePin() {
-  const pin = document.createElement('div'), img = document.createElement('img');
-  pin.className = 'vehicle-pin';
-  img.src = image(selected,false);
+function vehicleVisual(id) {
+  const visual = document.createElement('span'), img = document.createElement('img');
+  visual.className = 'vehicle-visual';
+  visual.dataset.vehicle = id;
+  img.src = image(id);
   img.alt = '';
-  pin.append(img);
+  visual.append(img);
+  return visual;
+}
+
+function vehiclePin() {
+  const pin = document.createElement('div');
+  pin.className = 'vehicle-pin';
+  pin.append(vehicleVisual(selected));
   return pin;
 }
 
@@ -221,8 +229,13 @@ function updateUI() {
   const last = points.at(-1), previous = points.at(-2);
   const fresh = last && Date.now()-last.ts <= 15000;
   const moving = Boolean(active && fresh && previous && last.ts-previous.ts <= 15000 && meters(previous,last) > 5);
-  const src = image(selected,moving);
-  if ($('truck').getAttribute('src') !== src) $('truck').src = src;
+  const vehicleImage = $('truck');
+  const src = image(selected);
+  if (vehicleImage.getAttribute('src') !== src) vehicleImage.src = src;
+  const visual = $('rideVisual');
+  visual.dataset.vehicle = selected;
+  visual.classList.toggle('is-moving',moving);
+  $('vehicleName').textContent = name(selected);
   $('state').textContent = active ? (fresh ? (moving ? '이동 중' : '위치 수신 완료') : 'GPS 위치 수신 중')
     : review ? '저장된 운행' : '운행 대기';
   const elapsed = active ? Date.now()-active.start : review ? new Date(review.end)-new Date(review.start) : 0;
@@ -427,10 +440,7 @@ for (const [id,label] of cars) {
   const button = document.createElement('button');
   button.className = 'vehicle';
   button.dataset.vehicle = id;
-  const img = document.createElement('img');
-  img.src = image(id,false);
-  img.alt = '';
-  button.append(img,label);
+  button.append(vehicleVisual(id),label);
   button.onclick = () => {
     if (selected !== id && review) {
       review = undefined;
