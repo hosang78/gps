@@ -79,3 +79,15 @@ dialog small { font-size: .73rem; }
 #serverSettings { margin: 11px 0; padding-top: 8px; border-top: 1px solid #e4edf4; }
 #serverSettings summary { cursor: pointer; font-size: .86rem; font-weight: 700; }
 #serverSettings label { margin-top: 7px; }
+
+.compact { min-height: 37px; padding: 4px 8px; font-size: .77rem; }
+.period-switch { display: flex; gap: 2px; padding: 2px; border: 1px solid #d9e4ef; border-radius: 9px; background: #eff5fb; }
+.period-switch button { min-height: 32px; padding: 4px 7px; border: 0; border-radius: 6px; background: transparent; color: #436484; font-size: .76rem; font-weight: 720; }
+.period-switch button[aria-pressed=true] { color: #fff; background: #1459a3; }
+.trip-totals { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 5px; margin: 8px 0 0; }
+.trip-totals div { padding: 7px 6px; border-radius: 8px; background: #f1f6fb; }
+.trip-totals dt { color: var(--muted); font-size: .69rem; }
+.trip-totals dd { margin: 1px 0 0; font-size: clamp(.71rem,3.35vw,.93rem); font-weight: 760; font-variant-numeric: tabular-nums; }
+.route-pin { display: inline-block; padding: 2px 6px; border: 1px solid #fff; border-radius: 7px; background: #21613f; color: #fff; font: 700 11px/1.45 system-ui,sans-serif; white-space: nowrap; box-shadow: 0 1px 4px #0c26484d; }
+.route-pin.end { background: #954130; }
+.route-pin.parking { background: #14589d; }
