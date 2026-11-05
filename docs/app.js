@@ -24,6 +24,8 @@ let period = 'today', reviewRequest = 0;
 let watchId, sampler, syncTimer, clock, latest;
 let positionRequest, currentStops = [], kakaoLoad;
 const stopNames = new Map(), stopLookups = new Set();
+let timeline = [], selectedEvent, pendingMapPoint;
+const eventRows = new Map();
 const name = id => cars.find(([key]) => key === id)?.[1] || id;
 const image = id => './vehicles/' + id + '-photo.webp';
 const formatTime = value => new Date(value).toLocaleString('ko-KR', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
@@ -90,7 +92,77 @@ function findStops(list) {
   return stops;
 }
 
+function timelineClock(ts, seconds = false) {
+  return new Date(ts).toLocaleTimeString('ko-KR',{
+    hour:'2-digit',minute:'2-digit',...(seconds ? {second:'2-digit'} : {}),hourCycle:'h23'
+  });
+}
+
+function tripTimeline(trip,list,stops) {
+  const first = list[0], last = list.at(-1);
+  const start = new Date(trip.start).getTime(), end = trip.end ? new Date(trip.end).getTime() : last.ts;
+  const events = [{id:'departure',kind:'start',at:first.ts,point:first,title:'출발 위치',label:'출발'}];
+  if (trip.end) events.push({id:'arrival',kind:'end',at:last.ts,point:last,title:'도착 위치',label:'도착'});
+  if (trip.end && first === last) events.splice(0,2,{
+    id:'arrival',kind:'end',at:last.ts,point:last,title:'출발·도착 위치',label:'출발·도착'
+  });
+  stops.forEach((stop,i) => events.push({id:'stop-'+i,kind:'stop',at:stop.start,point:stop.point,
+    until:stop.end,title:'주요 정차 '+(i+1),label:'정차 '+Math.floor((stop.end-stop.start)/60000)+'분'}));
+
+  const gap = (from,to) => {
+    if (to-from > 15000) events.push({id:'gap-'+from,kind:'gap',at:from,until:to,title:'GPS 기록 공백'});
+  };
+  gap(start,first.ts);
+  for (let i=1;i<list.length;i++) gap(list[i-1].ts,list[i].ts);
+  gap(last.ts,end);
+  let cursor = 0;
+  const firstTick = Math.max(1,Math.ceil((first.ts-15000-start)/600000));
+  const limit = Math.min(end,last.ts+15001);
+  for (let tick=firstTick, target=start+tick*600000; target<limit; tick++,target+=600000) {
+    while (cursor<list.length && list[cursor].ts<target) cursor++;
+    const before = list[cursor-1], after = list[cursor];
+    if (before && after && after.ts !== target && after.ts-before.ts > 15000) continue;
+    if (!before && after?.ts !== target && first.ts-start > 15000 || !after && end-last.ts > 15000) continue;
+    const point = !after || before && target-before.ts < after.ts-target ? before : after;
+    if (!point || Math.abs(point.ts-target)>15000) continue;
+    const minute = tick*10;
+    events.push({id:'tick-'+minute,kind:'tick',at:target,point,title:'출발 후 '+minute+'분',label:timelineClock(target)});
+  }
+  return events.sort((a,b) => a.at-b.at);
+}
+
+function highlightTimeline(id, source) {
+  const event = timeline.find(item => item.id === id);
+  if (!event?.point) return;
+  selectedEvent = id;
+  pendingMapPoint = event.point;
+  applyTimelineSelection();
+  const row = eventRows.get(id), list = $('timelineList');
+  if (row) {
+    const item = row.getBoundingClientRect(), pane = list.getBoundingClientRect();
+    if (item.top < pane.top || item.bottom > pane.bottom) list.scrollTop += item.top-pane.top-10;
+  }
+  if (source !== 'map') {
+    map?.focus?.(event.point);
+    if (window.innerWidth < 760) $('map').scrollIntoView({block:'nearest'});
+  }
+}
+
+function applyTimelineSelection() {
+  for (const [id,row] of eventRows) {
+    row.classList.toggle('is-selected',id === selectedEvent);
+    if (id === selectedEvent) row.setAttribute('aria-current','true');
+    else row.removeAttribute('aria-current');
+  }
+  $('map').querySelectorAll('[data-event-id]').forEach(pin => {
+    pin.classList.toggle('is-selected',pin.dataset.eventId === selectedEvent);
+    pin.setAttribute('aria-pressed',String(pin.dataset.eventId === selectedEvent));
+  });
+}
+
 function routePins(list) {
+  if (timeline.length) return timeline.filter(event => event.point)
+    .map(event => ({...event,eventId:event.id}));
   const pins = currentStops.map((stop,i) => ({point:stop.point,kind:'stop',label:'정차 '+(i+1)}));
   if (!review?.end || !list.length) return pins;
   const first = list[0], last = list.at(-1);
@@ -99,21 +171,32 @@ function routePins(list) {
   return [...pins,{point:first,kind:'start',label:'출발'},{point:last,kind:'end',label:'도착'}];
 }
 
-function pinLabel({kind,label}) {
-  const node = document.createElement('span');
+function pinLabel({kind,label,eventId,title}) {
+  const node = document.createElement(eventId ? 'button' : 'span');
   node.className = 'route-pin ' + kind;
   node.textContent = label;
+  if (eventId) {
+    node.type = 'button';
+    node.dataset.eventId = eventId;
+    node.setAttribute('aria-label',title);
+    node.setAttribute('aria-pressed',String(eventId === selectedEvent));
+    node.classList.toggle('is-selected',eventId === selectedEvent);
+    node.onclick = event => { event.stopPropagation(); highlightTimeline(eventId,'map'); };
+  }
   return node;
 }
 
 function fallbackMap(container) {
   const canvas = document.createElement('canvas');
-  container.replaceChildren(canvas);
+  const overlay = document.createElement('div');
+  overlay.className = 'canvas-pins';
+  container.replaceChildren(canvas,overlay);
   return { update(list, fit, pins) {
     const width = container.clientWidth, height = container.clientHeight, ratio = devicePixelRatio || 1;
     canvas.width = width * ratio;
     canvas.height = height * ratio;
     const ctx = canvas.getContext('2d');
+    overlay.replaceChildren();
     ctx.scale(ratio,ratio);
     ctx.fillStyle = '#e8f1f6';
     ctx.fillRect(0,0,width,height);
@@ -133,17 +216,25 @@ function fallbackMap(container) {
     if (pins.length) {
       ctx.font = 'bold 13px system-ui';
       ctx.textAlign = 'center';
-      for (const {point,kind,label} of pins) {
+      for (const pin of pins) {
+        const {point,kind,label} = pin;
         const [x,y] = xy(point);
-        ctx.fillStyle = {start:'#21613f',end:'#954130',parking:'#14589d',stop:'#775217'}[kind];
-        ctx.fillText(label, Math.max(32,Math.min(width-32,x)), y+(kind === 'stop' ? 15 : -5));
+        if (pin.eventId) {
+          const element = pinLabel(pin);
+          element.style.left = Math.max(26,Math.min(width-26,x))+'px';
+          element.style.top = Math.max(15,Math.min(height-15,y+(kind === 'stop' ? 15 : -8)))+'px';
+          overlay.append(element);
+        } else {
+          ctx.fillStyle = {start:'#21613f',end:'#954130',parking:'#14589d',stop:'#775217'}[kind];
+          ctx.fillText(label, Math.max(32,Math.min(width-32,x)), y+(kind === 'stop' ? 15 : -5));
+        }
       }
     }
     if (!pins.some(pin => pin.kind !== 'stop')) {
       ctx.font = '24px system-ui';
       ctx.fillText(({ 'cold-01':'🏎️', 'fresh-02':'🚘', 'work-03':'🚚' })[selected] || '🚘', ...xy(list.at(-1)));
     }
-  }, destroy() { canvas.remove(); } };
+  }, destroy() { canvas.remove(); overlay.remove(); } };
 }
 function osmMap(container, center) {
   const leaflet = window.L;
@@ -166,8 +257,8 @@ function osmMap(container, center) {
     labels.clearLayers();
     for (const pin of pins) {
       const labelIcon = leaflet.divIcon({html:pinLabel(pin),className:'',iconSize:[1,1],
-        iconAnchor:[18,pin.kind === 'stop' ? -16 : 14]});
-      leaflet.marker([pin.point.lat,pin.point.lng],{icon:labelIcon,interactive:false}).addTo(labels);
+        iconAnchor:[{start:34,end:3,tick:-7}[pin.kind] ?? 18,pin.kind === 'stop' ? -16 : 14]});
+      leaflet.marker([pin.point.lat,pin.point.lng],{icon:labelIcon,interactive:Boolean(pin.eventId),keyboard:false}).addTo(labels);
     }
     const point = list.at(-1);
     marker.setOpacity(point && !pins.some(pin => pin.kind !== 'stop') ? 1 : 0);
@@ -175,10 +266,13 @@ function osmMap(container, center) {
     if (markerVehicle !== selected) { marker.setIcon(icon()); markerVehicle = selected; }
     const pos = [point.lat,point.lng];
     marker.setLatLng(pos);
-    if (fit && list.length > 1) view.fitBounds(route.getBounds(), {maxZoom:17,padding:[24,24]});
+    if (fit && list.length > 1) {
+      view.invalidateSize?.({pan:false});
+      view.fitBounds(route.getBounds(), {maxZoom:17,padding:[42,32]});
+    }
     else if (last !== point) view.panTo(pos);
     last = point;
-  }, destroy() { view.remove(); } };
+  }, focus(point) { view.setView([point.lat,point.lng],17); }, destroy() { view.remove(); } };
 }
 function kakaoMap(container, maps, center) {
   const coords = p => new maps.LatLng(p.lat,p.lng);
@@ -194,7 +288,8 @@ function kakaoMap(container, maps, center) {
     });
     labels.forEach(label => label.setMap(null));
     labels = pins.map(pin => new maps.CustomOverlay({
-      map:view,position:coords(pin.point),content:pinLabel(pin),yAnchor:pin.kind === 'stop' ? -.8 : .8,zIndex:2
+      map:view,position:coords(pin.point),content:pinLabel(pin),clickable:Boolean(pin.eventId),
+      xAnchor:{start:.97,end:.07,tick:0}[pin.kind] ?? .5,yAnchor:pin.kind === 'stop' ? -.8 : .8,zIndex:2
     }));
     const point = list.at(-1);
     marker.setMap(point && !pins.some(pin => pin.kind !== 'stop') ? view : null);
@@ -203,12 +298,13 @@ function kakaoMap(container, maps, center) {
     const pos = coords(point);
     marker.setPosition(pos);
     if (fit && list.length > 1) {
+      view.relayout?.();
       const bounds = new maps.LatLngBounds();
       list.forEach(p => bounds.extend(coords(p)));
       view.setBounds(bounds);
     } else if (last !== point) view.panTo(pos);
     last = point;
-  }, destroy() {
+  }, focus(point) { view.setLevel?.(3); view.panTo(coords(point)); }, destroy() {
     labels.forEach(label => label.setMap(null));
     marker.setMap(null);
     container.replaceChildren();
@@ -251,29 +347,79 @@ async function lookupStop(point, key, lookupId) {
   } finally {
     stopLookups.delete(lookupId);
     if (!stopNames.has(lookupId)) stopNames.set(lookupId,null);
-    if (key === read('kakaoKey','') && currentStops.length) renderStops();
+    if (key === read('kakaoKey','') && currentStops.length) {
+      renderStops();
+      for (const event of timeline) {
+        const detail = eventRows.get(event.id)?.querySelector('small');
+        if (event.kind === 'stop' && detail) detail.textContent = timelineDetail(event);
+      }
+    }
   }
 }
 
+function stopPlace(point,key) {
+  const coordinates = point.lat.toFixed(5)+', '+point.lng.toFixed(5);
+  const lookupId = key+'|'+coordinates;
+  if (key && !stopNames.has(lookupId) && !stopLookups.has(lookupId)) lookupStop(point,key,lookupId);
+  const place = stopNames.get(lookupId);
+  return place?.building ? place.building+' 인근'+(place.street ? ' · '+place.street : '')
+    : place?.street || 'GPS 좌표 '+coordinates;
+}
+
 function renderStops() {
-  $('stopDetails').hidden = !currentStops.length;
+  $('stopDetails').hidden = !currentStops.length || Boolean(timeline.length);
   const list = $('stopList'), key = read('kakaoKey','');
   list.replaceChildren();
   currentStops.forEach(({point,start,end},i) => {
     const item = document.createElement('li'), title = document.createElement('strong'), location = document.createElement('small');
     const minutes = Math.floor((end-start)/60000), seconds = Math.floor((end-start)/1000)%60;
-    const coordinates = point.lat.toFixed(5)+', '+point.lng.toFixed(5);
-    const lookupId = key+'|'+coordinates;
-    if (key && !stopNames.has(lookupId) && !stopLookups.has(lookupId)) lookupStop(point,key,lookupId);
-    const place = stopNames.get(lookupId);
-    const area = place?.building ? place.building+' 인근' : place?.street || 'GPS 좌표 '+coordinates;
     title.textContent = '정차 '+(i+1)+' · '+minutes+'분'+(seconds ? ' '+seconds+'초' : '');
-    location.textContent = area+(place?.building && place.street ? ' · '+place.street : '')
-      +' · '+formatTime(start)+' ~ '+formatTime(end);
+    location.textContent = stopPlace(point,key)+' · '+formatTime(start)+' ~ '+formatTime(end);
     item.append(title,location);
     list.append(item);
   });
 }
+
+function timelineDetail(event) {
+  if (event.kind === 'gap') return timelineClock(event.at,true)+' ~ '+timelineClock(event.until,true);
+  if (event.kind === 'stop') return stopPlace(event.point,read('kakaoKey',''))
+    +' · '+timelineClock(event.at,true)+' ~ '+timelineClock(event.until,true);
+  return 'GPS '+timelineClock(event.point.ts,true)+' · 정확도 ±'+Math.round(event.point.accuracy)+'m';
+}
+
+function renderTimeline() {
+  const list = $('timelineList'), fragment = document.createDocumentFragment();
+  $('timelinePanel').hidden = !timeline.length;
+  $('routeLayout').classList.toggle('has-timeline',Boolean(timeline.length));
+  eventRows.clear();
+  let longest;
+  for (const event of timeline) {
+    const item = document.createElement('li');
+    const row = document.createElement(event.point ? 'button' : 'div');
+    const clock = document.createElement('time'), content = document.createElement('span');
+    const title = document.createElement('strong'), detail = document.createElement('small');
+    row.className = 'timeline-entry '+event.kind;
+    clock.textContent = timelineClock(event.at);
+    title.textContent = event.title+(event.kind === 'stop' ? ' · '+Math.floor((event.until-event.at)/60000)+'분' : '');
+    detail.textContent = timelineDetail(event);
+    content.append(title,detail);
+    row.append(clock,content);
+    if (event.point) {
+      row.type = 'button';
+      row.onclick = () => highlightTimeline(event.id,'timeline');
+      eventRows.set(event.id,row);
+    }
+    if (event.kind === 'stop' && (!longest || event.until-event.at > longest.until-longest.at)) longest = event;
+    item.append(row);
+    fragment.append(item);
+  }
+  list.replaceChildren(fragment);
+  const button = $('longestStop');
+  button.hidden = !longest;
+  button.onclick = longest ? () => highlightTimeline(longest.id,'timeline') : null;
+  applyTimelineSelection();
+}
+
 function clearMap() {
   mapGeneration++;
   map?.destroy();
@@ -282,6 +428,9 @@ function clearMap() {
   $('mapNote').hidden = true;
   $('mapWaiting').hidden = false;
   currentStops = [];
+  timeline = [];
+  selectedEvent = pendingMapPoint = undefined;
+  renderTimeline();
   renderStops();
 }
 
@@ -289,6 +438,8 @@ function drawMap(fit = false) {
   const first = points[0];
   if (!first) return;
   currentStops = review?.parking ? [] : findStops(points);
+  timeline = review && !review.parking ? tripTimeline(review,points,currentStops) : [];
+  renderTimeline();
   renderStops();
   if (map) {
     map.update(points,fit,routePins(points));
@@ -312,6 +463,7 @@ function drawMap(fit = false) {
     map = kakaoMap(container,maps,[last.lat,last.lng]);
     $('mapNote').textContent = '카카오맵';
     map.update(points,fit || Boolean(review),routePins(points));
+    if (pendingMapPoint) map.focus(pendingMapPoint);
   }).catch(() => {
     if (generation === mapGeneration) $('mapNote').textContent = '카카오맵 연결 실패 · OpenStreetMap 사용 중';
   });
@@ -664,6 +816,12 @@ for (const [id,label] of cars) {
 }
 $('action').onclick = action;
 $('parking').onclick = showParking;
+$('overviewRoute').onclick = () => {
+  selectedEvent = pendingMapPoint = undefined;
+  map?.update(points,true,routePins(points));
+  applyTimelineSelection();
+  $('timelineList').scrollTop = 0;
+};
 $('periodToday').onclick = () => { period = 'today'; showTotals(); };
 $('periodMonth').onclick = () => { period = 'month'; showTotals(); };
 $('settings').onclick = () => {

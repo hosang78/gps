@@ -6,9 +6,9 @@
 <meta name="theme-color" content="#0a1728">
 <title>수협 차량 운행기록</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="./style.css?v=6">
+<link rel="stylesheet" href="./style.css?v=7">
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script type="module" src="./app.js?v=6"></script>
+<script type="module" src="./app.js?v=7"></script>
 </head>
 <body>
 <header><div class="top"><div class="brand"><img src="./vehicles/symbol.webp" alt="수협"><div><small>수협 차량관리</small><h1>차량 운행기록</h1></div></div><button id="settings" class="outline">설정</button></div></header>
@@ -23,9 +23,16 @@
 <div class="ride-info"><span id="state" class="status">운행 대기</span><strong id="vehicleName" class="vehicle-name">페라리 01</strong><div id="metrics">00:00 · 0.00 km</div><small id="freshness">운행을 시작하면 지도에 위치가 표시됩니다.</small></div>
 <span id="rideVisual" class="vehicle-visual ride-visual" data-vehicle="cold-01"><img id="truck" src="./vehicles/cold-01-photo.webp" alt="선택한 차량"></span>
 </div>
+<div id="routeLayout" class="route-layout"><div class="map-column">
 <div id="mapWaiting" class="map-waiting">운행을 시작하면 현재 위치를 표시합니다.</div>
 <div id="map" aria-label="운행 경로 지도" hidden></div>
 <div id="mapNote" class="muted" hidden></div>
+</div>
+<section id="timelinePanel" class="timeline-panel" aria-labelledby="timelineTitle" hidden>
+<div class="row"><h3 id="timelineTitle">운행 타임라인</h3><button id="overviewRoute" class="outline compact" type="button">전체 경로</button></div>
+<div class="timeline-tools"><span>출발 기준 10분 간격 · 실제 GPS</span><button id="longestStop" type="button" hidden>가장 긴 정차 보기</button></div>
+<ol id="timelineList" class="timeline-list"></ol>
+</section></div>
 <section id="stopDetails" class="stop-details" aria-labelledby="stopTitle" hidden>
 <h3 id="stopTitle">장시간 정차</h3>
 <ul id="stopList"></ul>
