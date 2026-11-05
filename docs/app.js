@@ -26,6 +26,7 @@ let positionRequest, currentStops = [], kakaoLoad;
 const stopNames = new Map(), stopLookups = new Set();
 let timeline = [], selectedEvent, pendingMapPoint;
 const eventRows = new Map();
+let mapInteractive = false;
 const name = id => cars.find(([key]) => key === id)?.[1] || id;
 const image = id => './vehicles/' + id + '-photo.webp';
 const formatTime = value => new Date(value).toLocaleString('ko-KR', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
@@ -142,10 +143,7 @@ function highlightTimeline(id, source) {
     const item = row.getBoundingClientRect(), pane = list.getBoundingClientRect();
     if (item.top < pane.top || item.bottom > pane.bottom) list.scrollTop += item.top-pane.top-10;
   }
-  if (source !== 'map') {
-    map?.focus?.(event.point);
-    if (window.innerWidth < 760) $('map').scrollIntoView({block:'nearest'});
-  }
+  if (source !== 'map') map?.focus?.(event.point);
 }
 
 function applyTimelineSelection() {
@@ -242,7 +240,10 @@ function osmMap(container, center) {
     $('mapNote').textContent = '지도 연결 대기 · 경로만 표시';
     return fallbackMap(container);
   }
-  const view = leaflet.map(container).setView(center,17);
+  const view = leaflet.map(container,{
+    dragging:false,scrollWheelZoom:false,touchZoom:false,keyboard:false,
+    doubleClickZoom:false,boxZoom:false,tapHold:false
+  }).setView(center,17);
   const layer = leaflet.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   }).addTo(view);
@@ -272,11 +273,18 @@ function osmMap(container, center) {
     }
     else if (last !== point) view.panTo(pos);
     last = point;
+  }, setInteractive(enabled) {
+    for (const handler of [view.dragging,view.scrollWheelZoom,view.touchZoom,view.keyboard,view.doubleClickZoom]) {
+      if (enabled) handler?.enable();
+      else handler?.disable();
+    }
   }, focus(point) { view.setView([point.lat,point.lng],17); }, destroy() { view.remove(); } };
 }
 function kakaoMap(container, maps, center) {
   const coords = p => new maps.LatLng(p.lat,p.lng);
-  const view = new maps.Map(container,{center:new maps.LatLng(...center),level:4});
+  const view = new maps.Map(container,{
+    center:new maps.LatLng(...center),level:4,draggable:false,zoomable:false,keyboardShortcuts:false
+  });
   const marker = new maps.CustomOverlay({position:new maps.LatLng(...center),content:vehiclePin(),yAnchor:.5});
   let lines = [], labels = [], last, markerVehicle = selected;
   return { update(list, fit, pins) {
@@ -304,6 +312,10 @@ function kakaoMap(container, maps, center) {
       view.setBounds(bounds);
     } else if (last !== point) view.panTo(pos);
     last = point;
+  }, setInteractive(enabled) {
+    view.setDraggable?.(enabled);
+    view.setZoomable?.(enabled);
+    view.setKeyboardShortcuts?.(enabled);
   }, focus(point) { view.setLevel?.(3); view.panTo(coords(point)); }, destroy() {
     labels.forEach(label => label.setMap(null));
     marker.setMap(null);
@@ -420,10 +432,20 @@ function renderTimeline() {
   applyTimelineSelection();
 }
 
+function setMapInteraction(enabled) {
+  mapInteractive = enabled && Boolean(map?.setInteractive);
+  $('mapTools').hidden = !map?.setInteractive;
+  $('map').classList.toggle('map-interactive',mapInteractive);
+  $('mapGesture').setAttribute('aria-pressed',String(mapInteractive));
+  $('mapGestureHint').textContent = mapInteractive ? '지도를 이동하거나 확대할 수 있습니다.' : '지도를 쓸어도 화면이 스크롤됩니다.';
+  map?.setInteractive?.(mapInteractive);
+}
+
 function clearMap() {
   mapGeneration++;
   map?.destroy();
   map = undefined;
+  setMapInteraction(false);
   $('map').hidden = true;
   $('mapNote').hidden = true;
   $('mapWaiting').hidden = false;
@@ -452,6 +474,7 @@ function drawMap(fit = false) {
   $('mapNote').hidden = false;
   $('mapNote').textContent = 'OpenStreetMap';
   map = osmMap(container,center);
+  setMapInteraction(false);
   map.update(points,fit,routePins(points));
   const key = read('kakaoKey','');
   if (!key) return;
@@ -461,6 +484,7 @@ function drawMap(fit = false) {
     map.destroy();
     container.replaceChildren();
     map = kakaoMap(container,maps,[last.lat,last.lng]);
+    setMapInteraction(mapInteractive);
     $('mapNote').textContent = '카카오맵';
     map.update(points,fit || Boolean(review),routePins(points));
     if (pendingMapPoint) map.focus(pendingMapPoint);
@@ -816,6 +840,7 @@ for (const [id,label] of cars) {
 }
 $('action').onclick = action;
 $('parking').onclick = showParking;
+$('mapGesture').onclick = () => setMapInteraction(!mapInteractive);
 $('overviewRoute').onclick = () => {
   selectedEvent = pendingMapPoint = undefined;
   map?.update(points,true,routePins(points));
