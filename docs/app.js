@@ -16,6 +16,7 @@ let active = previousTrip?.real ? {
 } : null;
 let selected = active?.vehicle || cars[0][0];
 let records = read('gpsRecords',[]);
+const parkingByVehicle = read('parkingByVehicle',{});
 let points = active?.points || [];
 let code = sessionStorage.getItem(prefix+'code') || '';
 let cloudRecords = [], review, busy = false, syncTask, map, mapGeneration = 0;
@@ -385,6 +386,12 @@ function finishTrip() {
       records = [active,...records].filter((trip,i) => i < 30 || trip.server && !trip.synced);
     }
     saveRecords();
+    if (active.points.length) {
+      parkingByVehicle[active.vehicle] = {id:active.id,vehicle:active.vehicle,start:active.start,
+        end:active.end,points:[active.points.at(-1)]};
+      try { save('parkingByVehicle',parkingByVehicle); }
+      catch { /* The trip itself is already stored. */ }
+    }
     review = active;
     message(active.points.length ? '운행일지를 이 기기에 저장했습니다.' : 'GPS 좌표 없이 운행을 종료했습니다.');
   } else {
@@ -482,8 +489,12 @@ function showTripOnMap(row, detail, parking = false) {
 async function showParking() {
   if (active) return;
   const request = ++reviewRequest;
-  const candidates = tripRows().filter(row => row.end && row.vehicle === selected)
-    .sort((a,b) => new Date(b.end)-new Date(a.end));
+  const candidates = tripRows().filter(row => row.end && row.vehicle === selected);
+  const lastParking = parkingByVehicle[selected];
+  if (lastParking && !candidates.some(row => row.id === lastParking.id && row.points?.length)) {
+    candidates.unshift(lastParking);
+  }
+  candidates.sort((a,b) => new Date(b.end)-new Date(a.end));
   try {
     for (const row of candidates) {
       const detail = await tripPoints(row);
