@@ -55,22 +55,36 @@ export default async function handler(request) {
       return reply({ error: '요청 내용을 확인해 주세요.' }, 400);
     }
     if (typeof data?.id !== 'string' || !uuid.test(data.id)) return reply({ error: '운행 번호를 확인해 주세요.' }, 400);
+    const now = Date.now();
+    // Phones send the real start/end time so trips synced later keep their recorded times.
+    const clientTime = value => value === undefined ? null
+      : Number.isInteger(value) && value >= now - 7 * 86400000 && value <= now + 300000 ? value : NaN;
     if (path === '/start') {
       if (!vehicles.has(data.vehicle)) return reply({ error: '등록된 차량을 선택해 주세요.' }, 400);
-      const inserted = await sql`INSERT INTO fleet_demo.trips (id, vehicle_id, participant)
-        VALUES (${data.id}, ${data.vehicle}, ${owner}) ON CONFLICT DO NOTHING RETURNING id`;
+      const start = clientTime(data.start);
+      if (Number.isNaN(start)) return reply({ error: '출발 시각을 확인해 주세요.' }, 400);
+      // A trip left open for longer than the 12-hour recording limit can no longer receive points.
+      await sql`UPDATE fleet_demo.trips t SET ended_at = COALESCE(
+          (SELECT max(recorded_at) FROM fleet_demo.trip_points WHERE trip_id = t.id), t.started_at)
+        WHERE t.vehicle_id = ${data.vehicle} AND t.participant = ${owner} AND t.ended_at IS NULL
+          AND t.id <> ${data.id} AND t.started_at < now() - interval '13 hours'`;
+      const inserted = await sql`INSERT INTO fleet_demo.trips (id, vehicle_id, participant, started_at)
+        VALUES (${data.id}, ${data.vehicle}, ${owner}, COALESCE(to_timestamp(${start} / 1000.0), now()))
+        ON CONFLICT DO NOTHING RETURNING id`;
       if (inserted.length) return reply({ ok: true }, 201);
       const same = await sql`SELECT id FROM fleet_demo.trips WHERE id = ${data.id}
         AND vehicle_id = ${data.vehicle} AND participant = ${owner} AND ended_at IS NULL`;
       return same.length ? reply({ ok: true }) : reply({ error: '이미 운행 중인 차량입니다.' }, 409);
     }
     if (path === '/end') {
-      const ended = await sql`UPDATE fleet_demo.trips SET ended_at = COALESCE(ended_at, now())
+      const end = clientTime(data.end);
+      if (Number.isNaN(end)) return reply({ error: '종료 시각을 확인해 주세요.' }, 400);
+      const ended = await sql`UPDATE fleet_demo.trips SET ended_at = COALESCE(ended_at,
+          GREATEST(started_at, COALESCE(to_timestamp(${end} / 1000.0), now())))
         WHERE id = ${data.id} AND participant = ${owner} RETURNING id`;
       return ended.length ? reply({ ok: true }) : reply({ error: '운행기록을 찾을 수 없습니다.' }, 404);
     }
     const points = data.points;
-    const now = Date.now();
     if (!Array.isArray(points) || !points.length || points.length > 100 || points.some(p =>
       !Number.isInteger(p?.seq) || p.seq < 0 || p.seq >= 8640 ||
       !Number.isFinite(p.lat) || Math.abs(p.lat) > 90 || !Number.isFinite(p.lng) || Math.abs(p.lng) > 180 ||

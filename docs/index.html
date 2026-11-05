@@ -6,9 +6,9 @@
 <meta name="theme-color" content="#0a1728">
 <title>수협 차량 운행기록</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="./style.css?v=8">
+<link rel="stylesheet" href="./style.css?v=9">
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script type="module" src="./app.js?v=8"></script>
+<script type="module" src="./app.js?v=9"></script>
 </head>
 <body>
 <header><div class="top"><div class="brand"><img src="./vehicles/symbol.webp" alt="수협"><div><small>수협 차량관리</small><h1>차량 운행기록</h1></div></div><button id="settings" class="outline">설정</button></div></header>
@@ -42,12 +42,14 @@
 <ul id="stopList"></ul>
 </section>
 <div class="row controls"><button id="action" class="primary">운행 시작</button></div>
+<p id="awakeNote" class="muted" hidden></p>
 <p id="message" role="status" aria-live="polite"></p>
 </section>
 <section class="panel" aria-labelledby="logTitle">
 <div class="row"><h2 id="logTitle">운행일지</h2><div class="period-switch" role="group" aria-label="운행 집계 기간"><button id="periodToday" type="button" aria-pressed="true">오늘</button><button id="periodMonth" type="button" aria-pressed="false">이번 달</button></div></div>
 <dl class="trip-totals" aria-live="polite"><div><dt>운행 횟수</dt><dd id="totalTrips">0회</dd></div><div><dt>이동 거리</dt><dd id="totalDistance">0.00 km</dd></div><div><dt>운행 시간</dt><dd id="totalDuration">0초</dd></div></dl>
 <p class="muted">이 기기에 저장된 GPS 운행 · 시작 시각 기준</p>
+<p id="syncState" class="sync-state" role="status" hidden></p>
 <ul id="records"></ul>
 </section>
 </main>

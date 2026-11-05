@@ -71,8 +71,9 @@ function kilometers(list) {
   return routeGroups(list).reduce((sum, group) => sum + group.reduce((total, p, i) => total + (i ? meters(group[i-1], p) : 0), 0), 0) / 1000;
 }
 function duration(ms) {
-  const s = Math.floor(Math.max(0, ms) / 1000);
-  return [Math.floor(s / 60), s % 60].map(v => String(v).padStart(2,'0')).join(':');
+  const s = Math.floor(Math.max(0, ms) / 1000), hours = Math.floor(s / 3600);
+  const clock = [Math.floor(s / 60) % 60, s % 60].map(v => String(v).padStart(2,'0')).join(':');
+  return hours ? hours + ':' + clock : clock;
 }
 
 function findStops(list) {
@@ -499,8 +500,12 @@ async function api(path, body, token = code) {
   if (body) headers['Content-Type'] = 'application/json';
   const response = await fetch(apiBase + path, {method:body ? 'POST':'GET', headers,
     body:body ? JSON.stringify(body) : undefined, signal:AbortSignal.timeout(15000)});
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || '서버 요청에 실패했습니다.');
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.error || '서버 응답 오류(' + response.status + ')입니다.');
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 
@@ -539,6 +544,7 @@ function updateUI() {
   $('freshness').textContent = last
     ? (review ? '기록 위치 ' : '최근 위치 ') + new Date(last.ts).toLocaleTimeString('ko-KR') + ' · 정확도 ±' + Math.round(last.accuracy) + 'm'
     : active ? '휴대폰에서 받은 첫 위치를 기다립니다.' : '운행을 시작하면 GPS를 켭니다.';
+  updateAwakeNote();
   $('mapWaiting').textContent = active ? '현재 위치를 확인하고 있습니다.' : review ? '저장된 위치가 없습니다.' : '운행을 시작하면 현재 위치를 표시합니다.';
 }
 
@@ -591,6 +597,7 @@ function startTimers() {
   sampler = setInterval(sample,5000);
   clock = setInterval(updateUI,1000);
   if (trip.server) syncTimer = setInterval(sync,30000);
+  keepAwake();
 }
 
 function stopTimers() {
@@ -601,6 +608,7 @@ function stopTimers() {
   watchId = undefined;
   positionRequest = null;
   latest = null;
+  releaseAwake();
 }
 
 async function codeTag(token) {
@@ -608,8 +616,27 @@ async function codeTag(token) {
   return Array.from(new Uint8Array(digest),n => n.toString(16).padStart(2,'0')).join('');
 }
 
+// Returns how many old trips had to be dropped to fit, or -1 when even the newest trip does not fit.
 function saveRecords() {
-  save('gpsRecords',records);
+  let removed = 0;
+  for (;;) {
+    try { save('gpsRecords',records); return removed; }
+    catch {
+      const index = records.findLastIndex((trip,i) => i > 0 && !(trip.server && !trip.synced));
+      if (index < 0) return -1;
+      records.splice(index,1);
+      removed++;
+    }
+  }
+}
+
+const pendingTrips = () => records.filter(trip => trip.server && !trip.synced);
+
+function showSyncState() {
+  const pending = pendingTrips().length, note = $('syncState');
+  note.hidden = !pending;
+  note.textContent = '서버 전송 대기 ' + pending + '건'
+    + (code ? (syncTask ? ' · 전송 중' : '') : ' · 설정에서 접근 코드를 입력하면 전송됩니다');
 }
 
 function sync() {
@@ -618,43 +645,85 @@ function sync() {
   const token = code;
   syncTask = (async () => {
     const tag = await codeTag(token);
-    const queued = records.filter(trip => trip.server && !trip.synced);
+    // Oldest first, so an earlier open trip is closed before a later one on the same vehicle starts.
+    const queued = pendingTrips().sort((a,b) => a.start-b.start);
     if (active?.server) queued.push(active);
+    let failure;
     for (const trip of queued) {
       if (trip.codeTag === null || trip.codeTag && trip.codeTag !== tag) continue;
       if (!trip.points.length && !trip.registered) continue;
-      trip.codeTag = tag;
-      if (!trip.registered) {
-        await api('/start',{id:trip.id,vehicle:trip.vehicle},token);
-        trip.registered = true;
+      try {
+        trip.codeTag = tag;
+        if (!trip.registered) {
+          await api('/start',{id:trip.id,vehicle:trip.vehicle,start:trip.start},token);
+          trip.registered = true;
+        }
+        while (trip.sent < trip.points.length) {
+          const batch = trip.points.slice(trip.sent,trip.sent+100);
+          await api('/points',{id:trip.id,points:batch},token);
+          trip.sent += batch.length;
+        }
+        if (trip.end) {
+          await api('/end',{id:trip.id,end:trip.end},token);
+          trip.synced = true;
+        }
+      } catch (error) {
+        failure ??= error;
+        // Without a server reply (offline, timeout) the remaining trips would fail the same way.
+        if (!error.status) break;
+      } finally {
+        if (active === trip) persist();
+        else saveRecords();
       }
-      while (trip.sent < trip.points.length) {
-        const batch = trip.points.slice(trip.sent,trip.sent+100);
-        await api('/points',{id:trip.id,points:batch},token);
-        trip.sent += batch.length;
-      }
-      if (trip.end) {
-        await api('/end',{id:trip.id},token);
-        trip.synced = true;
-      }
-      if (active === trip) persist();
-      else saveRecords();
     }
+    if (failure) throw failure;
   })().catch(error => {
     if (code === token) message('서버 저장 대기 · ' + error.message + ' 기록은 이 기기에 보관됩니다.',true);
-  }).finally(() => { syncTask = null; });
+  }).finally(() => { syncTask = null; showRecords(); });
+  showSyncState();
   return syncTask;
+}
+
+let wakeLock, wakeRequest;
+function updateAwakeNote() {
+  const note = $('awakeNote');
+  note.hidden = !active;
+  note.textContent = wakeLock
+    ? '화면 꺼짐 방지 켜짐 · 화면을 잠그거나 다른 앱으로 나가면 기록이 멈춥니다.'
+    : '운행 중에는 화면을 켜 두세요. 화면이 꺼지면 기록이 멈춥니다.';
+}
+function keepAwake() {
+  if (!active || document.hidden || wakeLock || wakeRequest || !navigator.wakeLock) return updateAwakeNote();
+  wakeRequest = navigator.wakeLock.request('screen').then(lock => {
+    if (!active) { lock.release().catch(() => {}); return; }
+    wakeLock = lock;
+    lock.addEventListener('release',() => {
+      if (wakeLock === lock) wakeLock = undefined;
+      updateAwakeNote();
+    });
+  }).catch(() => {}).finally(() => { wakeRequest = undefined; updateAwakeNote(); });
+}
+function releaseAwake() {
+  const lock = wakeLock;
+  wakeLock = undefined;
+  lock?.release().catch(() => {});
+  updateAwakeNote();
 }
 
 function finishTrip() {
   if (!active.end) active.end = active.ending || Date.now();
   active.ending = active.end;
   stopTimers();
+  let notice = '';
   if (active.points.length || active.registered) {
     if (!records.some(trip => trip.id === active.id)) {
       records = [active,...records].filter((trip,i) => i < 30 || trip.server && !trip.synced);
     }
-    saveRecords();
+    // The finished trip moves into the log, so its separate copy no longer needs the space.
+    localStorage.removeItem(prefix+'active');
+    const removed = saveRecords();
+    if (removed < 0) notice = ' 기기 저장 공간이 부족해 이 일지는 페이지를 닫으면 사라집니다.';
+    else if (removed) notice = ' 저장 공간이 부족해 오래된 운행일지 '+removed+'건을 지웠습니다.';
     if (active.points.length) {
       parkingByVehicle[active.vehicle] = {id:active.id,vehicle:active.vehicle,start:active.start,
         end:active.end,points:[active.points.at(-1)]};
@@ -662,7 +731,7 @@ function finishTrip() {
       catch { /* The trip itself is already stored. */ }
     }
     review = active;
-    message(active.points.length ? '운행일지를 이 기기에 저장했습니다.' : 'GPS 좌표 없이 운행을 종료했습니다.');
+    message((active.points.length ? '운행일지를 이 기기에 저장했습니다.' : 'GPS 좌표 없이 운행을 종료했습니다.')+notice,Boolean(notice));
   } else {
     review = undefined;
     message('GPS 위치를 받지 못해 저장된 경로가 없습니다.');
@@ -791,10 +860,22 @@ function showRecords() {
   }
   for (const row of list) {
     const item = document.createElement('li'), button = document.createElement('button');
+    const title = document.createElement('strong'), detail = document.createElement('small');
+    const local = records.includes(row);
+    item.className = 'record';
+    button.className = 'record-open';
     button.disabled = Boolean(active);
-    button.textContent = name(row.vehicle) + ' · ' + formatTime(row.start)
-      + (row.end ? ' · '+duration(new Date(row.end)-new Date(row.start)) : ' · 종료 기록 없음')
-      + (row.points ? ' · '+kilometers(row.points).toFixed(2)+' km' : '');
+    title.textContent = name(row.vehicle) + ' · ' + formatTime(row.start);
+    detail.textContent = (row.end ? duration(new Date(row.end)-new Date(row.start)) : '종료 기록 없음')
+      + (row.points ? ' · '+kilometers(row.points).toFixed(2)+' km' : '')
+      + (local ? '' : ' · 서버 기록');
+    button.append(title,detail);
+    if (local && row.server && !row.synced) {
+      const badge = document.createElement('span');
+      badge.className = 'record-badge';
+      badge.textContent = '전송 대기';
+      button.append(badge);
+    }
     button.onclick = async () => {
       if (active) return;
       const request = ++reviewRequest;
@@ -806,8 +887,44 @@ function showRecords() {
       }
     };
     item.append(button);
+    if (local) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'record-delete';
+      remove.textContent = '삭제';
+      remove.disabled = Boolean(active);
+      remove.setAttribute('aria-label',name(row.vehicle)+' '+formatTime(row.start)+' 운행일지 삭제');
+      remove.onclick = () => deleteRecord(row);
+      item.append(remove);
+    }
     ul.append(item);
   }
+  showSyncState();
+}
+
+function deleteRecord(trip) {
+  if (active) return;
+  const pending = trip.server && !trip.synced;
+  const note = pending ? '\n서버로 아직 보내지 않은 기록이라 서버에도 남지 않습니다.'
+    : trip.synced ? '\n서버에 저장된 기록은 서버에 그대로 남습니다.' : '';
+  if (!confirm(name(trip.vehicle)+' '+formatTime(trip.start)+' 운행일지를 이 기기에서 삭제할까요?'+note)) return;
+  // Close a half-sent trip on the server so it does not keep the vehicle marked as driving.
+  if (pending && trip.registered && code) api('/end',{id:trip.id,end:trip.end},code).catch(() => {});
+  records = records.filter(item => item !== trip);
+  saveRecords();
+  if (parkingByVehicle[trip.vehicle]?.id === trip.id) {
+    delete parkingByVehicle[trip.vehicle];
+    try { save('parkingByVehicle',parkingByVehicle); } catch { /* Deleting only frees space. */ }
+  }
+  if (review?.id === trip.id) {
+    reviewRequest++;
+    review = undefined;
+    points = [];
+    clearMap();
+    updateUI();
+  }
+  showRecords();
+  message('운행일지를 삭제했습니다.');
 }
 
 async function refreshCloud() {
@@ -888,7 +1005,7 @@ window.addEventListener('online',sync);
 document.addEventListener('visibilitychange',() => {
   if (document.hidden) return;
   showTotals();
-  if (active) sample();
+  if (active) { sample(); keepAwake(); }
 });
 updateUI();
 showRecords();
