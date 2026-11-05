@@ -10,7 +10,7 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-body { margin: 0; min-width: 0; }
+body { margin: 0; min-width: 0; word-break: keep-all; overflow-wrap: anywhere; }
 button, input { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; opacity: .62; }
@@ -69,6 +69,16 @@ main { padding: 13px clamp(10px, 3.2vw, 22px) 32px; }
 ul { margin: 7px 0 0; padding: 0; list-style: none; }
 li { padding: 7px 0; border-top: 1px solid #e4edf4; font-size: .83rem; }
 li button { padding: 3px 1px; border: 0; background: transparent; color: #075a9d; text-align: left; font-weight: 670; }
+#records li.record { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
+.record-open { position: relative; flex: 1; min-width: 0; min-height: 48px; padding: 6px 30px 6px 9px !important; border-radius: 9px; }
+.record-open:not(:disabled):hover { background: #f1f6fb; }
+.record-open::after { position: absolute; right: 10px; top: 50%; color: #8aa4bd; font-size: 1.1rem; transform: translateY(-50%); content: "›"; }
+.record-open strong { display: block; color: #123b63; font-size: .85rem; }
+.record-open small { display: block; color: var(--muted); font-size: .74rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.record-badge { display: inline-block; margin-top: 3px; padding: 1px 6px; border-radius: 99px; background: #fff1da; color: #714b17; font-size: .66rem; font-weight: 760; }
+.record-delete { flex: none; min-height: 36px; padding: 4px 9px !important; border: 1px solid #ecd2cf !important; border-radius: 8px; color: #a0322b !important; font-size: .74rem; }
+.sync-state { margin-top: 5px; padding: 5px 8px; border-radius: 7px; background: #fff6e6; color: #714b17; font-size: .74rem; font-weight: 700; }
+#awakeNote { margin-top: 6px; }
 
 dialog { width: min(92vw, 420px); padding: 17px; border: 1px solid #bfcede; border-radius: 15px; color: #12334e; }
 dialog::backdrop { background: #06243ea3; }
