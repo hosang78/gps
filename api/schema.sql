@@ -27,5 +27,5 @@ CREATE TABLE IF NOT EXISTS fleet_demo.trip_points (
 );
 
 INSERT INTO fleet_demo.vehicles (id, label)
-VALUES ('cold-01', '냉동탑차 01'), ('fresh-02', '냉장탑차 02'), ('work-03', '업무용 탑차 03')
-ON CONFLICT DO NOTHING;
+VALUES ('cold-01', '페라리 01'), ('fresh-02', '제네시스 02'), ('work-03', '업무용 탑차 03')
+ON CONFLICT (id) DO UPDATE SET label = EXCLUDED.label;

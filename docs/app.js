@@ -1,7 +1,8 @@
 import { apiBase } from './config.js';
 
 const $ = id => document.getElementById(id);
-const cars = [['cold-01','냉동탑차 01'],['fresh-02','냉장탑차 02'],['work-03','업무용 탑차 03']];
+const cars = [['cold-01','페라리 01'],['fresh-02','제네시스 02'],['work-03','업무용 탑차 03']];
+const presenter = new URLSearchParams(location.search).get('view') === 'present';
 const origin = [37.5147, 127.1058];
 const demoPath = [[37.5147,127.1058],[37.5143,127.1064],[37.5138,127.1071],[37.5135,127.1080],[37.5132,127.1087],[37.5137,127.1091],[37.5145,127.1096],[37.5151,127.1091],[37.5158,127.1085],[37.5162,127.1076],[37.5157,127.1066],[37.5151,127.1061]];
 const prefix = 'suhyup.fleet.v1.';
@@ -10,17 +11,27 @@ function read(key, fallback) {
   catch { return fallback; }
 }
 function save(key, value) { localStorage.setItem(prefix + key, JSON.stringify(value)); }
-let active = read('active', null);
-let pending = read('pendingStart', null);
+let active = presenter ? null : read('active', null);
+let pending = presenter ? null : read('pendingStart', null);
 let selected = active?.vehicle || pending?.vehicle || cars[0][0];
 let records = read('demoRecords', []);
 let points = active?.points || [];
 let watchId, sampler, syncTimer, clock, latest, busy = false, syncTask, map;
 let mapGeneration = 0;
 let cloudRecords = [];
+let presentedTrip, pinnedTrip, viewerCode = '', viewerTask, viewerRevision = 0;
 const name = id => cars.find(([key]) => key === id)?.[1] || id;
-const image = (id, animated) => './vehicles/' + id + (animated ? '.gif' : '.webp');
+const image = (id, animated) => './vehicles/' + id + (animated ? '.gif' : '.webp') + (id === 'work-03' ? '' : '?v=2');
 const formatTime = value => new Date(value).toLocaleString('ko-KR', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
+
+function vehiclePin() {
+  const pin = document.createElement('div'), img = document.createElement('img');
+  pin.className = 'vehicle-pin';
+  img.src = image(selected,false);
+  img.alt = '';
+  pin.append(img);
+  return pin;
+}
 
 function message(text, error = false) {
   $('message').textContent = text;
@@ -73,7 +84,8 @@ function fallbackMap(container) {
     for (const group of routeGroups(list)) {
       ctx.beginPath(); group.forEach((p,i) => i ? ctx.lineTo(...xy(p)) : ctx.moveTo(...xy(p))); ctx.stroke();
     }
-    ctx.font = '24px system-ui'; ctx.fillText('🚚', ...xy(list.at(-1)));
+    ctx.font = '24px system-ui';
+    ctx.fillText(({ 'cold-01':'🏎️', 'fresh-02':'🚘', 'work-03':'🚚' })[selected] || '🚘', ...xy(list.at(-1)));
   }, destroy() { canvas.remove(); } };
 }
 function osmMap(container) {
@@ -88,13 +100,15 @@ function osmMap(container) {
   }).addTo(view);
   layer.once('tileerror', () => { $('mapNote').textContent = '일부 배경 지도를 불러오지 못했습니다. 경로는 계속 기록됩니다.'; });
   const route = leaflet.polyline([], { color:'#087cbd', weight:4 }).addTo(view);
-  const marker = leaflet.marker(origin, { icon:leaflet.divIcon({html:'🚚',className:'truck-pin',iconSize:[30,30]}), interactive:false, opacity:0 }).addTo(view);
-  let last;
+  const icon = () => leaflet.divIcon({html:vehiclePin(),className:'',iconSize:[40,30],iconAnchor:[20,15]});
+  const marker = leaflet.marker(origin, {icon:icon(), interactive:false, opacity:0}).addTo(view);
+  let last, markerVehicle = selected;
   return { update(list, fit) {
     route.setLatLngs(routeGroups(list).map(g => g.map(p => [p.lat,p.lng])));
     const point = list.at(-1);
     marker.setOpacity(point ? 1 : 0);
     if (!point) { last = null; return; }
+    if (markerVehicle !== selected) { marker.setIcon(icon()); markerVehicle = selected; }
     const pos = [point.lat,point.lng];
     marker.setLatLng(pos);
     if (fit && list.length > 1) view.fitBounds(route.getBounds(), {maxZoom:17,padding:[24,24]});
@@ -105,8 +119,8 @@ function osmMap(container) {
 function kakaoMap(container, maps) {
   const coords = p => new maps.LatLng(p.lat,p.lng);
   const view = new maps.Map(container,{center:new maps.LatLng(...origin),level:4});
-  const marker = new maps.CustomOverlay({position:new maps.LatLng(...origin),content:'<div class="truck-pin" style="width:30px;height:30px">🚚</div>',yAnchor:.5});
-  let lines = [], last;
+  const marker = new maps.CustomOverlay({position:new maps.LatLng(...origin),content:vehiclePin(),yAnchor:.5});
+  let lines = [], last, markerVehicle = selected;
   return { update(list, fit) {
     const groups = routeGroups(list);
     while (lines.length > groups.length) lines.pop().setMap(null);
@@ -117,6 +131,7 @@ function kakaoMap(container, maps) {
     const point = list.at(-1);
     marker.setMap(point ? view : null);
     if (!point) { last = null; return; }
+    if (markerVehicle !== selected) { marker.setContent(vehiclePin()); markerVehicle = selected; }
     const pos = coords(point);
     marker.setPosition(pos);
     if (fit && list.length > 1) {
@@ -181,9 +196,9 @@ function persist() {
 }
 function updateUI() {
   const real = $('real').checked;
-  $('mode').textContent = real ? '휴대폰 GPS' : '가상 경로';
+  $('mode').textContent = presenter ? '발표용 조회' : real ? '휴대폰 GPS' : '가상 경로';
   $('access').hidden = !real;
-  $('real').disabled = Boolean(active || pending) || busy;
+  $('real').disabled = presenter || Boolean(active || pending) || busy;
   $('code').disabled = Boolean(active) && Boolean(currentCode());
   for (const btn of $('vehicles').children) {
     btn.disabled = Boolean(active || pending) || busy;
@@ -193,13 +208,20 @@ function updateUI() {
   $('action').textContent = active?.ending ? '저장 다시 시도' : active ? '운행 종료' : '운행 시작';
   $('action').classList.toggle('stop', Boolean(active));
   const last = points.at(-1), previous = points.at(-2);
-  const fresh = last && Date.now() - last.ts <= 15000;
-  const moving = Boolean(active && !active.ending && fresh && previous && last.ts-previous.ts <= 15000 && meters(previous,last) > 5);
+  const fresh = last && Date.now() - last.ts <= (presenter ? 50000 : 15000);
+  const running = presenter ? presentedTrip && !presentedTrip.ended_at : active && !active.ending;
+  const moving = Boolean(running && fresh && previous && last.ts-previous.ts <= 15000 && meters(previous,last) > 5);
   const src = image(selected,moving);
   if ($('truck').getAttribute('src') !== src) $('truck').src = src;
-  $('state').textContent = active?.ending ? '저장 대기' : active ? (!fresh ? '위치 수신 대기' : moving ? '이동 중' : '정차 중') : '운행 대기';
-  $('metrics').textContent = duration(active ? (active.ending || Date.now())-active.start : 0) + ' · ' + kilometers(points).toFixed(2) + ' km';
-  $('freshness').textContent = last ? '최근 위치 ' + new Date(last.ts).toLocaleTimeString('ko-KR') + (real ? ' · 정확도 ±' + Math.round(last.accuracy) + 'm' : '') : '운행을 시작하면 지도에 위치가 표시됩니다.';
+  $('state').textContent = presenter
+    ? (presentedTrip ? name(selected) + ' · ' + (running ? (fresh ? '운행 중' : '서버 위치 수신 대기') : '운행 종료') : '조회 대기')
+    : active?.ending ? '저장 대기' : active ? (!fresh ? '위치 수신 대기' : moving ? '이동 중' : '정차 중') : '운행 대기';
+  const elapsed = presentedTrip
+    ? (presentedTrip.ended_at ? Date.parse(presentedTrip.ended_at) : Date.now()) - Date.parse(presentedTrip.started_at)
+    : active ? (active.ending || Date.now())-active.start : 0;
+  $('metrics').textContent = duration(elapsed) + ' · ' + kilometers(points).toFixed(2) + ' km';
+  $('freshness').textContent = last ? (presenter ? '서버에 저장된 위치 ' : '최근 위치 ') + new Date(last.ts).toLocaleTimeString('ko-KR') + (real ? ' · 정확도 ±' + Math.round(last.accuracy) + 'm' : '')
+    : presenter ? '서버에 도착한 위치가 지도에 표시됩니다.' : '운행을 시작하면 지도에 위치가 표시됩니다.';
 }
 function addPoint(point) {
   const previous = points.at(-1);
@@ -253,7 +275,7 @@ function sync() {
   return syncTask;
 }
 async function action() {
-  if (busy) return;
+  if (busy || presenter) return;
   busy = true;
   message('');
   updateUI();
@@ -314,11 +336,21 @@ function showRecords() {
   for (const row of list) {
     const item = document.createElement('li'), button = document.createElement('button');
     button.disabled = Boolean(active);
+    if (presenter && row.id === presentedTrip?.id) {
+      button.classList.add('records-selected');
+      button.setAttribute('aria-current','true');
+    }
     const start = row.start ?? row.started_at, end = row.end ?? row.ended_at;
     const elapsed = end ? ' · '+duration(new Date(end)-new Date(start)) : ' · 운행 중';
     button.textContent = name(row.vehicle ?? row.vehicle_id) + ' · ' + formatTime(start) + elapsed + (row.points ? ' · '+kilometers(row.points).toFixed(2)+' km' : '');
     button.onclick = async () => {
       if (active) return;
+      if (presenter) {
+        pinnedTrip = row.id;
+        viewerRevision++;
+        await refreshPresenter();
+        return;
+      }
       try {
         const detail = row.points || (await api('/trip/'+row.id)).points.map(p => ({...p,ts:Date.parse(p.recorded_at)}));
         points = detail;
@@ -339,13 +371,69 @@ async function refresh() {
   }
   showRecords();
 }
+
+function resetPresenter(code) {
+  viewerCode = code;
+  viewerRevision++;
+  pinnedTrip = undefined;
+  presentedTrip = undefined;
+  cloudRecords = [];
+  points = [];
+  map?.update(points);
+  showRecords();
+  updateUI();
+}
+
+function refreshPresenter(manual = false) {
+  if (manual) {
+    if (!currentCode()) {
+      message('휴대폰에서 사용한 시연 코드를 입력해 주세요.',true);
+      $('code').focus();
+      return;
+    }
+    resetPresenter(currentCode());
+    sessionStorage.setItem(prefix+'code',viewerCode);
+  }
+  if (!viewerCode || document.hidden) return;
+  const revision = viewerRevision;
+  if (viewerTask) return viewerTask.then(() => {
+    if (viewerRevision === revision) return refreshPresenter();
+  });
+  viewerTask = (async () => {
+    try {
+      const {trips} = await api('/trips');
+      if (viewerRevision !== revision) return;
+      cloudRecords = trips;
+      const row = trips.find(t => t.id === pinnedTrip) || trips.find(t => !t.ended_at) || trips[0];
+      if (row && (row.id !== presentedTrip?.id || !presentedTrip.ended_at)) {
+        const detail = await api('/trip/'+row.id);
+        if (viewerRevision !== revision) return;
+        const fit = detail.trip.id !== presentedTrip?.id || !points.length && detail.points.length > 0;
+        presentedTrip = detail.trip;
+        selected = detail.trip.vehicle_id;
+        points = detail.points.map(p => ({...p,ts:Date.parse(p.recorded_at)}));
+        map?.update(points,fit);
+      }
+      if (row) message(pinnedTrip ? '선택한 운행 기록을 표시합니다.' : '최신 운행 기록을 표시합니다.');
+      else message('아직 저장된 운행이 없습니다. 휴대폰에서 운행을 시작하면 여기에 표시됩니다.');
+      showRecords();
+      updateUI();
+    } catch(error) {
+      if (viewerRevision !== revision) return;
+      if (error.status === 401) resetPresenter('');
+      message(error.message,true);
+    }
+  })().finally(() => { viewerTask = null; });
+  return viewerTask;
+}
+
 for (const [id,label] of cars) {
   const button = document.createElement('button'); button.className = 'vehicle'; button.dataset.vehicle = id;
   const img = document.createElement('img'); img.src = image(id,false); img.alt = '';
   button.append(img,label); button.onclick = () => { selected = id; updateUI(); };
   $('vehicles').append(button);
 }
-$('real').checked = Boolean((active || pending)?.real);
+$('real').checked = presenter || Boolean((active || pending)?.real);
 $('code').value = sessionStorage.getItem(prefix+'code') || '';
 $('code').addEventListener('change',() => {
   if (currentCode()) sessionStorage.setItem(prefix+'code',currentCode());
@@ -353,7 +441,33 @@ $('code').addEventListener('change',() => {
 });
 $('real').onchange = () => { points = []; map?.update(points); updateUI(); refresh(); };
 $('action').onclick = action;
-$('reload').onclick = refresh;
+$('reload').onclick = presenter ? () => viewerCode ? refreshPresenter() : refreshPresenter(true) : refresh;
+$('accessForm').onsubmit = event => {
+  event.preventDefault();
+  if (presenter) refreshPresenter(true);
+  else refresh();
+};
+if (presenter) {
+  document.body.classList.add('presenter');
+  $('vehicleTitle').textContent = '발표 화면 연결';
+  $('real').closest('label').hidden = true;
+  $('vehicles').hidden = true;
+  $('action').hidden = true;
+  $('connect').hidden = false;
+  $('latestTrip').hidden = false;
+  $('presentHelp').hidden = false;
+  $('presentLink').textContent = '운행 화면';
+  $('presentLink').href = './';
+  $('presentLink').removeAttribute('target');
+  $('latestTrip').onclick = () => refreshPresenter(true);
+  $('code').addEventListener('input',() => {
+    if (viewerCode && currentCode() !== viewerCode) {
+      resetPresenter('');
+      message('시연 코드를 입력하고 조회를 시작하세요.');
+    }
+  });
+  setInterval(() => { if (!viewerTask) refreshPresenter(); },15000);
+}
 $('settings').onclick = () => { $('mapKey').value = read('kakaoKey',''); $('settingsError').textContent = ''; $('mapSettings').showModal(); };
 $('cancel').onclick = () => $('mapSettings').close();
 $('mapForm').onsubmit = event => {
@@ -364,8 +478,13 @@ $('mapForm').onsubmit = event => {
   location.reload();
 };
 window.addEventListener('online',() => { if (active?.real) sync().catch(error => message(error.message,true)); });
-document.addEventListener('visibilitychange',() => { if (!document.hidden && active) sample(); });
+document.addEventListener('visibilitychange',() => {
+  if (document.hidden) return;
+  if (active) sample();
+  if (presenter && !viewerTask) refreshPresenter();
+});
 showMap();
 updateUI();
-refresh();
+if (presenter) showRecords();
+else refresh();
 if (active && !active.ending && (!active.real || navigator.geolocation)) startTimers();
