@@ -22,6 +22,8 @@ let code = sessionStorage.getItem(prefix+'code') || '';
 let cloudRecords = [], review, busy = false, syncTask, map, mapGeneration = 0;
 let period = 'today', reviewRequest = 0;
 let watchId, sampler, syncTimer, clock, latest;
+let positionRequest, currentStops = [], kakaoLoad;
+const stopNames = new Map(), stopLookups = new Set();
 const name = id => cars.find(([key]) => key === id)?.[1] || id;
 const image = id => './vehicles/' + id + '-photo.webp';
 const formatTime = value => new Date(value).toLocaleString('ko-KR', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
@@ -70,12 +72,31 @@ function duration(ms) {
   return [Math.floor(s / 60), s % 60].map(v => String(v).padStart(2,'0')).join(':');
 }
 
+function findStops(list) {
+  const stops = [];
+  let anchor, last;
+  const closeStop = () => {
+    if (anchor && last.ts-anchor.ts >= 5*60000) stops.push({point:anchor,start:anchor.ts,end:last.ts});
+  };
+  for (const point of list) {
+    if (!Number.isFinite(point.accuracy) || point.accuracy > 30) continue;
+    if (!anchor || point.ts-last.ts > 15000 || meters(anchor,point) > 30) {
+      closeStop();
+      anchor = point;
+    }
+    last = point;
+  }
+  closeStop();
+  return stops;
+}
+
 function routePins(list) {
-  if (!review?.end || !list.length) return [];
+  const pins = currentStops.map((stop,i) => ({point:stop.point,kind:'stop',label:'정차 '+(i+1)}));
+  if (!review?.end || !list.length) return pins;
   const first = list[0], last = list.at(-1);
   if (review.parking) return [{point:last,kind:'parking',label:'마지막 위치'}];
-  if (meters(first,last) < 12) return [{point:last,kind:'end',label:'출발·도착'}];
-  return [{point:first,kind:'start',label:'출발'},{point:last,kind:'end',label:'도착'}];
+  if (meters(first,last) < 12) return [...pins,{point:last,kind:'end',label:'출발·도착'}];
+  return [...pins,{point:first,kind:'start',label:'출발'},{point:last,kind:'end',label:'도착'}];
 }
 
 function pinLabel({kind,label}) {
@@ -114,10 +135,11 @@ function fallbackMap(container) {
       ctx.textAlign = 'center';
       for (const {point,kind,label} of pins) {
         const [x,y] = xy(point);
-        ctx.fillStyle = kind === 'start' ? '#21613f' : kind === 'end' ? '#954130' : '#14589d';
-        ctx.fillText(label, Math.max(32,Math.min(width-32,x)), y-5);
+        ctx.fillStyle = {start:'#21613f',end:'#954130',parking:'#14589d',stop:'#775217'}[kind];
+        ctx.fillText(label, Math.max(32,Math.min(width-32,x)), y+(kind === 'stop' ? 15 : -5));
       }
-    } else {
+    }
+    if (!pins.some(pin => pin.kind !== 'stop')) {
       ctx.font = '24px system-ui';
       ctx.fillText(({ 'cold-01':'🏎️', 'fresh-02':'🚘', 'work-03':'🚚' })[selected] || '🚘', ...xy(list.at(-1)));
     }
@@ -143,11 +165,12 @@ function osmMap(container, center) {
     route.setLatLngs(routeGroups(list).map(g => g.map(p => [p.lat,p.lng])));
     labels.clearLayers();
     for (const pin of pins) {
-      const labelIcon = leaflet.divIcon({html:pinLabel(pin),className:'',iconSize:[1,1],iconAnchor:[18,14]});
+      const labelIcon = leaflet.divIcon({html:pinLabel(pin),className:'',iconSize:[1,1],
+        iconAnchor:[18,pin.kind === 'stop' ? -16 : 14]});
       leaflet.marker([pin.point.lat,pin.point.lng],{icon:labelIcon,interactive:false}).addTo(labels);
     }
     const point = list.at(-1);
-    marker.setOpacity(point && !pins.length ? 1 : 0);
+    marker.setOpacity(point && !pins.some(pin => pin.kind !== 'stop') ? 1 : 0);
     if (!point) { last = null; return; }
     if (markerVehicle !== selected) { marker.setIcon(icon()); markerVehicle = selected; }
     const pos = [point.lat,point.lng];
@@ -171,10 +194,10 @@ function kakaoMap(container, maps, center) {
     });
     labels.forEach(label => label.setMap(null));
     labels = pins.map(pin => new maps.CustomOverlay({
-      map:view,position:coords(pin.point),content:pinLabel(pin),yAnchor:.8,zIndex:2
+      map:view,position:coords(pin.point),content:pinLabel(pin),yAnchor:pin.kind === 'stop' ? -.8 : .8,zIndex:2
     }));
     const point = list.at(-1);
-    marker.setMap(point && !pins.length ? view : null);
+    marker.setMap(point && !pins.some(pin => pin.kind !== 'stop') ? view : null);
     if (!point) { last = null; return; }
     if (markerVehicle !== selected) { marker.setContent(vehiclePin()); markerVehicle = selected; }
     const pos = coords(point);
@@ -192,16 +215,63 @@ function kakaoMap(container, maps, center) {
   } };
 }
 function loadKakao(key) {
-  return new Promise((resolve,reject) => {
+  if (kakaoLoad?.key === key) return kakaoLoad.promise;
+  const promise = new Promise((resolve,reject) => {
     const script = document.createElement('script');
     const timer = setTimeout(() => reject(new Error('지도 응답 시간 초과')),8000);
-    script.src = 'https://dapi.kakao.com/v2/maps/sdk.js?autoload=false&appkey=' + encodeURIComponent(key);
+    script.src = 'https://dapi.kakao.com/v2/maps/sdk.js?autoload=false&libraries=services&appkey=' + encodeURIComponent(key);
     script.onerror = () => { clearTimeout(timer); reject(new Error('카카오 지도 연결 실패')); };
     script.onload = () => {
       if (!window.kakao?.maps?.load) { clearTimeout(timer); reject(new Error('카카오 지도 권한 확인 필요')); return; }
       window.kakao.maps.load(() => { clearTimeout(timer); resolve(window.kakao.maps); });
     };
     document.head.append(script);
+  });
+  kakaoLoad = {key,promise};
+  return promise;
+}
+
+async function lookupStop(point, key, lookupId) {
+  stopLookups.add(lookupId);
+  try {
+    const {services} = await loadKakao(key);
+    if (!services?.Geocoder || key !== read('kakaoKey','')) return;
+    const address = await new Promise(resolve => {
+      const timeout = setTimeout(() => resolve(null),8000);
+      new services.Geocoder().coord2Address(point.lng,point.lat,(results,status) => {
+        clearTimeout(timeout);
+        resolve(status === services.Status.OK ? results?.[0] : null);
+      });
+    });
+    const road = address?.road_address;
+    const street = road?.address_name || address?.address?.address_name || '';
+    stopNames.set(lookupId,{building:road?.building_name?.trim() || '',street});
+  } catch {
+    stopNames.set(lookupId,null);
+  } finally {
+    stopLookups.delete(lookupId);
+    if (!stopNames.has(lookupId)) stopNames.set(lookupId,null);
+    if (key === read('kakaoKey','') && currentStops.length) renderStops();
+  }
+}
+
+function renderStops() {
+  $('stopDetails').hidden = !currentStops.length;
+  const list = $('stopList'), key = read('kakaoKey','');
+  list.replaceChildren();
+  currentStops.forEach(({point,start,end},i) => {
+    const item = document.createElement('li'), title = document.createElement('strong'), location = document.createElement('small');
+    const minutes = Math.floor((end-start)/60000), seconds = Math.floor((end-start)/1000)%60;
+    const coordinates = point.lat.toFixed(5)+', '+point.lng.toFixed(5);
+    const lookupId = key+'|'+coordinates;
+    if (key && !stopNames.has(lookupId) && !stopLookups.has(lookupId)) lookupStop(point,key,lookupId);
+    const place = stopNames.get(lookupId);
+    const area = place?.building ? place.building+' 인근' : place?.street || 'GPS 좌표 '+coordinates;
+    title.textContent = '정차 '+(i+1)+' · '+minutes+'분'+(seconds ? ' '+seconds+'초' : '');
+    location.textContent = area+(place?.building && place.street ? ' · '+place.street : '')
+      +' · '+formatTime(start)+' ~ '+formatTime(end);
+    item.append(title,location);
+    list.append(item);
   });
 }
 function clearMap() {
@@ -211,11 +281,15 @@ function clearMap() {
   $('map').hidden = true;
   $('mapNote').hidden = true;
   $('mapWaiting').hidden = false;
+  currentStops = [];
+  renderStops();
 }
 
 function drawMap(fit = false) {
   const first = points[0];
   if (!first) return;
+  currentStops = review?.parking ? [] : findStops(points);
+  renderStops();
   if (map) {
     map.update(points,fit,routePins(points));
     return;
@@ -270,7 +344,9 @@ function updateUI() {
   $('action').classList.toggle('stop',Boolean(active));
   const last = points.at(-1), previous = points.at(-2);
   const fresh = last && Date.now()-last.ts <= 15000;
-  const moving = Boolean(active && fresh && previous && last.ts-previous.ts <= 15000 && meters(previous,last) > 5);
+  const lastStop = currentStops.at(-1);
+  const stopped = active && fresh && lastStop && last.ts-lastStop.end <= 15000 && meters(lastStop.point,last) <= 30;
+  const moving = Boolean(active && fresh && !stopped && previous && last.ts-previous.ts <= 15000 && meters(previous,last) > 5);
   const vehicleImage = $('truck');
   const src = image(selected);
   if (vehicleImage.getAttribute('src') !== src) vehicleImage.src = src;
@@ -278,7 +354,7 @@ function updateUI() {
   visual.dataset.vehicle = selected;
   visual.classList.toggle('is-moving',moving);
   $('vehicleName').textContent = name(selected);
-  $('state').textContent = active ? (fresh ? (moving ? '이동 중' : '위치 수신 완료') : 'GPS 위치 수신 중')
+  $('state').textContent = active ? (fresh ? (stopped ? '장시간 정차 중' : moving ? '이동 중' : '위치 수신 완료') : 'GPS 위치 수신 중')
     : review?.parking ? '마지막 주차 위치' : review ? '저장된 운행' : '운행 대기';
   const elapsed = active ? Date.now()-active.start : review ? new Date(review.end)-new Date(review.start) : 0;
   $('metrics').textContent = review?.parking
@@ -290,10 +366,13 @@ function updateUI() {
   $('mapWaiting').textContent = active ? '현재 위치를 확인하고 있습니다.' : review ? '저장된 위치가 없습니다.' : '운행을 시작하면 현재 위치를 표시합니다.';
 }
 
-function sample() {
-  if (!active || active.ending || document.hidden || !latest || Date.now()-latest.ts > 12000) return;
+function sample(requestFresh = true) {
+  if (!active || active.ending || document.hidden || !latest || points.length >= 8640) return;
   const previous = points.at(-1);
-  if (points.length >= 8640 || previous && latest.ts <= previous.ts) return;
+  if (Date.now()-latest.ts > 12000 || previous && latest.ts <= previous.ts) {
+    if (requestFresh) requestStationaryFix(active);
+    return;
+  }
   if (previous && latest.ts-previous.ts <= 15000 && meters(previous,latest) / ((latest.ts-previous.ts)/1000) > 62) return;
   points.push({...latest,seq:points.length});
   try { persist(); }
@@ -302,21 +381,34 @@ function sample() {
   updateUI();
 }
 
+function acceptPosition(pos,trip,requested = false) {
+  if (active !== trip) return;
+  const {latitude:lat,longitude:lng,accuracy} = pos.coords;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(accuracy) ||
+      !Number.isFinite(pos.timestamp) || pos.timestamp < trip.start-1000) return;
+  if (accuracy > 100) {
+    message('GPS 정확도를 높이는 중입니다. 실내라면 창가나 실외에서 다시 확인해 주세요.');
+    return;
+  }
+  if (!latest || pos.timestamp > latest.ts) latest = {lat,lng,accuracy,ts:pos.timestamp};
+  if (requested || !points.length || Date.now()-points.at(-1).ts > 15000) sample(false);
+  if (points.length) message('');
+}
+
+function requestStationaryFix(trip) {
+  const gps = navigator.geolocation;
+  if (positionRequest || !gps.getCurrentPosition) return;
+  positionRequest = trip;
+  const clearRequest = () => { if (positionRequest === trip) positionRequest = null; };
+  gps.getCurrentPosition(pos => {
+    clearRequest();
+    acceptPosition(pos,trip,true);
+  },clearRequest,{enableHighAccuracy:true,maximumAge:0,timeout:9000});
+}
+
 function startTimers() {
   const trip = active;
-  watchId = navigator.geolocation.watchPosition(pos => {
-    if (active !== trip) return;
-    const {latitude:lat,longitude:lng,accuracy} = pos.coords;
-    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(accuracy) ||
-        !Number.isFinite(pos.timestamp) || pos.timestamp < trip.start-1000) return;
-    if (accuracy > 100) {
-      message('GPS 정확도를 높이는 중입니다. 실내라면 창가나 실외에서 다시 확인해 주세요.');
-      return;
-    }
-    latest = {lat,lng,accuracy,ts:pos.timestamp};
-    if (!points.length || Date.now()-points.at(-1).ts > 15000) sample();
-    if (points.length) message('');
-  }, error => {
+  watchId = navigator.geolocation.watchPosition(pos => acceptPosition(pos,trip),error => {
     if (active !== trip) return;
     message(error.code === 1 ? '브라우저에서 이 사이트의 위치 권한을 허용해 주세요.' : 'GPS 신호를 기다리는 중입니다.',true);
   },{enableHighAccuracy:true,maximumAge:0,timeout:12000});
@@ -331,6 +423,7 @@ function stopTimers() {
   clearInterval(syncTimer);
   clearInterval(clock);
   watchId = undefined;
+  positionRequest = null;
   latest = null;
 }
 

@@ -6,9 +6,9 @@
 <meta name="theme-color" content="#0a1728">
 <title>수협 차량 운행기록</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="./style.css?v=5">
+<link rel="stylesheet" href="./style.css?v=6">
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script type="module" src="./app.js?v=5.1"></script>
+<script type="module" src="./app.js?v=6"></script>
 </head>
 <body>
 <header><div class="top"><div class="brand"><img src="./vehicles/symbol.webp" alt="수협"><div><small>수협 차량관리</small><h1>차량 운행기록</h1></div></div><button id="settings" class="outline">설정</button></div></header>
@@ -26,6 +26,10 @@
 <div id="mapWaiting" class="map-waiting">운행을 시작하면 현재 위치를 표시합니다.</div>
 <div id="map" aria-label="운행 경로 지도" hidden></div>
 <div id="mapNote" class="muted" hidden></div>
+<section id="stopDetails" class="stop-details" aria-labelledby="stopTitle" hidden>
+<h3 id="stopTitle">장시간 정차</h3>
+<ul id="stopList"></ul>
+</section>
 <div class="row controls"><button id="action" class="primary">운행 시작</button></div>
 <p id="message" role="status" aria-live="polite"></p>
 </section>

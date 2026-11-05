@@ -91,3 +91,10 @@ dialog small { font-size: .73rem; }
 .route-pin { display: inline-block; padding: 2px 6px; border: 1px solid #fff; border-radius: 7px; background: #21613f; color: #fff; font: 700 11px/1.45 system-ui,sans-serif; white-space: nowrap; box-shadow: 0 1px 4px #0c26484d; }
 .route-pin.end { background: #954130; }
 .route-pin.parking { background: #14589d; }
+
+.route-pin.stop { background: #775217; }
+.stop-details { margin-top: 9px; padding: 8px; border: 1px solid #e7decc; border-radius: 9px; background: #fcf9f2; }
+.stop-details h3 { margin: 0; color: #69491a; font-size: .88rem; }
+.stop-details ul { margin-top: 4px; }
+.stop-details li { display: grid; gap: 1px; padding: 5px 0; border-color: #eee6d6; }
+.stop-details li small { color: #5a6573; font-size: .74rem; overflow-wrap: anywhere; }
