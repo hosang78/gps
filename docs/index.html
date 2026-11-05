@@ -6,9 +6,9 @@
 <meta name="theme-color" content="#0a1728">
 <title>수협 차량 운행기록</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="./style.css?v=9">
+<link rel="stylesheet" href="./style.css?v=10">
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script type="module" src="./app.js?v=9"></script>
+<script type="module" src="./app.js?v=10"></script>
 </head>
 <body>
 <header><div class="top"><div class="brand"><img src="./vehicles/symbol.webp" alt="수협"><div><small>수협 차량관리</small><h1>차량 운행기록</h1></div></div><button id="settings" class="outline">설정</button></div></header>
@@ -31,10 +31,13 @@
 </div>
 <div id="map" aria-label="운행 경로 지도" hidden></div>
 <div id="mapNote" class="muted" hidden></div>
+<div id="speedLegend" class="speed-legend" hidden></div>
 </div>
 <section id="timelinePanel" class="timeline-panel" aria-labelledby="timelineTitle" hidden>
 <div class="row"><h3 id="timelineTitle">운행 타임라인</h3><button id="overviewRoute" class="outline compact" type="button">전체 경로</button></div>
 <div class="timeline-tools"><span>출발 기준 10분 간격 · 실제 GPS</span><button id="longestStop" type="button" hidden>가장 긴 정차 보기</button></div>
+<p id="speedSummary" class="speed-summary"></p>
+<div class="replay-bar"><button id="replayToggle" type="button" class="outline compact" aria-pressed="false">경로 재생</button><select id="replaySpeed" aria-label="재생 속도"><option value="10">10배속</option><option value="30">30배속</option><option value="60" selected>60배속</option><option value="120">120배속</option></select><span id="replayStatus"></span></div>
 <ol id="timelineList" class="timeline-list"></ol>
 </section></div>
 <section id="stopDetails" class="stop-details" aria-labelledby="stopTitle" hidden>
@@ -60,6 +63,9 @@
 <label for="mapKey">카카오 JavaScript 키</label>
 <input id="mapKey" type="password" autocomplete="off" spellcheck="false" placeholder="카카오 키 붙여넣기">
 <small>입력란을 비워 저장하면 OpenStreetMap을 사용합니다.</small>
+<label for="speedLimit" class="field-gap">과속 기준 (km/h)</label>
+<input id="speedLimit" type="number" inputmode="numeric" min="20" max="200" step="1">
+<small>저장된 운행에서 이 속도 이상으로 5초 넘게 달린 구간을 과속으로 표시합니다.</small>
 <details id="serverSettings"><summary>서버 기록 연결</summary>
 <label for="code">개인 기록 접근 코드</label>
 <input id="code" type="password" autocomplete="off" spellcheck="false" placeholder="선택 입력">

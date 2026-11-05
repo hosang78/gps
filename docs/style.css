@@ -11,7 +11,7 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; min-width: 0; word-break: keep-all; overflow-wrap: anywhere; }
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; opacity: .62; }
 button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid #56a2ea; outline-offset: 3px; }
@@ -149,3 +149,13 @@ button.route-pin { cursor: pointer; }
 #map.map-interactive { touch-action: none; }
 .canvas-pins { position: absolute; inset: 0; pointer-events: none; }
 .canvas-pins .route-pin { position: absolute; transform: translate(-50%,-50%); pointer-events: auto; }
+.route-pin.speed { background: #c8323f; }
+.speed-legend { display: flex; flex-wrap: wrap; gap: 3px 10px; margin-top: 5px; color: var(--muted); font-size: .7rem; }
+.speed-legend span[style]::before { display: inline-block; width: 14px; height: 4px; margin-right: 4px; border-radius: 2px; background: var(--speed); vertical-align: middle; content: ""; }
+.speed-summary { margin: 0 0 5px; color: #183b60; font-size: .75rem; font-weight: 720; }
+.replay-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.replay-bar select { min-height: 37px; padding: 4px 6px; border: 1px solid #cbdbea; border-radius: 8px; background: #fff; color: #173e65; font-size: .77rem; }
+#replayToggle[aria-pressed=true] { border-color: #1459a3; background: #1459a3; color: #fff; }
+#replayStatus { color: #173e65; font-size: .75rem; font-weight: 720; font-variant-numeric: tabular-nums; }
+.canvas-cursor { position: absolute; z-index: 2; transform: translate(-50%,-50%); }
+dialog .field-gap { margin-top: 10px; }
