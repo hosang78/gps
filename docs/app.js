@@ -26,7 +26,7 @@ let positionRequest, currentStops = [], kakaoLoad;
 const stopNames = new Map(), stopLookups = new Set();
 let timeline = [], selectedEvent, pendingMapPoint;
 const eventRows = new Map();
-let mapInteractive = false;
+let mapInteractive = false, replay;
 const name = id => cars.find(([key]) => key === id)?.[1] || id;
 const image = id => './vehicles/' + id + '-photo.webp';
 const formatTime = value => new Date(value).toLocaleString('ko-KR', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
@@ -94,6 +94,63 @@ function findStops(list) {
   return stops;
 }
 
+// Speed at each point from its neighbours, which evens out a single noisy GPS fix.
+function pointSpeeds(list) {
+  return list.map((p,i) => {
+    const a = list[i-1], b = list[i+1];
+    const from = a && p.ts-a.ts <= 15000 ? a : p, to = b && b.ts-p.ts <= 15000 ? b : p;
+    return from === to ? 0 : meters(from,to) / ((to.ts-from.ts)/1000) * 3.6;
+  });
+}
+function speedLimit() {
+  const value = Number(read('speedLimit',80));
+  return Number.isInteger(value) && value >= 20 && value <= 200 ? value : 80;
+}
+const speedColors = ['#2f9e8f','#087cbd','#e39b2d','#d23f4e'];
+function speedBand(speed, limit) {
+  return speed >= limit ? 3 : speed >= Math.min(60,limit) ? 2 : speed >= Math.min(30,limit) ? 1 : 0;
+}
+
+// Saved trips are drawn in speed colours; a live trip keeps one plain line.
+function routeSegments(list) {
+  if (!review || review.parking) return routeGroups(list).map(group => ({color:speedColors[1],points:group}));
+  const speeds = pointSpeeds(list), limit = speedLimit(), segments = [];
+  let current;
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i-1], b = list[i];
+    if (!a || b.ts-a.ts > 15000) {
+      current = {color:speedColors[0],points:[b]};
+      segments.push(current);
+      continue;
+    }
+    const color = speedColors[speedBand((speeds[i-1]+speeds[i])/2,limit)];
+    if (current.points.length > 1 && current.color === color) current.points.push(b);
+    else if (current.points.length === 1) { current.color = color; current.points.push(b); }
+    else { current = {color,points:[a,b]}; segments.push(current); }
+  }
+  return segments;
+}
+
+function speedEvents(list, speeds, limit) {
+  const events = [];
+  let run;
+  const close = () => {
+    if (run && run.last.ts-run.first.ts >= 5000) events.push({id:'speed-'+run.first.ts,kind:'speed',
+      at:run.first.ts,until:run.last.ts,point:run.peak,top:run.top,
+      title:'과속 구간',label:'과속 '+Math.round(run.top)});
+    run = undefined;
+  };
+  list.forEach((p,i) => {
+    if (run && p.ts-run.last.ts > 15000) close();
+    if (speeds[i] < limit || !(p.accuracy <= 30)) return close();
+    run ??= {first:p,top:0};
+    run.last = p;
+    if (speeds[i] > run.top) { run.top = speeds[i]; run.peak = p; }
+  });
+  close();
+  return events;
+}
+
 function timelineClock(ts, seconds = false) {
   return new Date(ts).toLocaleTimeString('ko-KR',{
     hour:'2-digit',minute:'2-digit',...(seconds ? {second:'2-digit'} : {}),hourCycle:'h23'
@@ -130,6 +187,7 @@ function tripTimeline(trip,list,stops) {
     const minute = tick*10;
     events.push({id:'tick-'+minute,kind:'tick',at:target,point,title:'출발 후 '+minute+'분',label:timelineClock(target)});
   }
+  events.push(...speedEvents(list,pointSpeeds(list),speedLimit()));
   return events.sort((a,b) => a.at-b.at);
 }
 
@@ -190,6 +248,7 @@ function fallbackMap(container) {
   const overlay = document.createElement('div');
   overlay.className = 'canvas-pins';
   container.replaceChildren(canvas,overlay);
+  let project, cursorPin;
   return { update(list, fit, pins) {
     const width = container.clientWidth, height = container.clientHeight, ratio = devicePixelRatio || 1;
     canvas.width = width * ratio;
@@ -207,9 +266,10 @@ function fallbackMap(container) {
     const lats = list.map(p => p.lat), lngs = list.map(p => p.lng);
     const minLat = Math.min(...lats), minLng = Math.min(...lngs);
     const scale = Math.min((height-52)/Math.max(.0002,Math.max(...lats)-minLat), (width-52)/Math.max(.0002,Math.max(...lngs)-minLng));
-    const xy = p => [26+(p.lng-minLng)*scale,height-26-(p.lat-minLat)*scale];
-    ctx.strokeStyle = '#087cbd'; ctx.lineWidth = 4;
-    for (const group of routeGroups(list)) {
+    const xy = project = p => [26+(p.lng-minLng)*scale,height-26-(p.lat-minLat)*scale];
+    ctx.lineWidth = 4;
+    for (const {color,points:group} of routeSegments(list)) {
+      ctx.strokeStyle = color;
       ctx.beginPath(); group.forEach((p,i) => i ? ctx.lineTo(...xy(p)) : ctx.moveTo(...xy(p))); ctx.stroke();
     }
     if (pins.length) {
@@ -233,6 +293,13 @@ function fallbackMap(container) {
       ctx.font = '24px system-ui';
       ctx.fillText(({ 'cold-01':'🏎️', 'fresh-02':'🚘', 'work-03':'🚚' })[selected] || '🚘', ...xy(list.at(-1)));
     }
+  }, cursor(point) {
+    if (!point || !project) { cursorPin?.remove(); cursorPin = null; return; }
+    if (!cursorPin) { cursorPin = vehiclePin(); cursorPin.classList.add('canvas-cursor'); }
+    if (!overlay.contains(cursorPin)) overlay.append(cursorPin);
+    const [x,y] = project(point);
+    cursorPin.style.left = x+'px';
+    cursorPin.style.top = y+'px';
   }, destroy() { canvas.remove(); overlay.remove(); } };
 }
 function osmMap(container, center) {
@@ -249,13 +316,16 @@ function osmMap(container, center) {
     maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   }).addTo(view);
   layer.once('tileerror', () => { $('mapNote').textContent = '일부 배경 지도를 불러오지 못했습니다. 경로는 계속 기록됩니다.'; });
-  const route = leaflet.polyline([], { color:'#087cbd', weight:4 }).addTo(view);
+  const route = leaflet.layerGroup().addTo(view);
   const labels = leaflet.layerGroup().addTo(view);
   const icon = () => leaflet.divIcon({html:vehiclePin(),className:'',iconSize:[40,30],iconAnchor:[20,15]});
   const marker = leaflet.marker(center, {icon:icon(), interactive:false, opacity:0}).addTo(view);
-  let last, markerVehicle = selected;
+  let last, markerVehicle = selected, cursorMarker;
   return { update(list, fit, pins) {
-    route.setLatLngs(routeGroups(list).map(g => g.map(p => [p.lat,p.lng])));
+    route.clearLayers();
+    for (const {color,points:group} of routeSegments(list)) {
+      leaflet.polyline(group.map(p => [p.lat,p.lng]),{color,weight:5}).addTo(route);
+    }
     labels.clearLayers();
     for (const pin of pins) {
       const labelIcon = leaflet.divIcon({html:pinLabel(pin),className:'',iconSize:[1,1],
@@ -270,10 +340,16 @@ function osmMap(container, center) {
     marker.setLatLng(pos);
     if (fit && list.length > 1) {
       view.invalidateSize?.({pan:false});
-      view.fitBounds(route.getBounds(), {maxZoom:17,padding:[42,32]});
+      view.fitBounds(leaflet.latLngBounds(list.map(p => [p.lat,p.lng])), {maxZoom:17,padding:[42,32]});
     }
     else if (last !== point) view.panTo(pos);
     last = point;
+  }, cursor(point) {
+    if (!point) { cursorMarker?.remove(); cursorMarker = null; return; }
+    const pos = [point.lat,point.lng];
+    if (!cursorMarker) cursorMarker = leaflet.marker(pos,{icon:icon(),interactive:false,zIndexOffset:1000}).addTo(view);
+    else cursorMarker.setLatLng(pos);
+    if (!view.getBounds().contains(pos)) view.panTo(pos);
   }, setInteractive(enabled) {
     for (const handler of [view.dragging,view.scrollWheelZoom,view.touchZoom,view.keyboard,view.doubleClickZoom]) {
       if (enabled) handler?.enable();
@@ -287,14 +363,12 @@ function kakaoMap(container, maps, center) {
     center:new maps.LatLng(...center),level:4,draggable:false,zoomable:false,keyboardShortcuts:false
   });
   const marker = new maps.CustomOverlay({position:new maps.LatLng(...center),content:vehiclePin(),yAnchor:.5});
-  let lines = [], labels = [], last, markerVehicle = selected;
+  let lines = [], labels = [], last, markerVehicle = selected, cursorPin;
   return { update(list, fit, pins) {
-    const groups = routeGroups(list);
-    while (lines.length > groups.length) lines.pop().setMap(null);
-    groups.forEach((group,i) => {
-      if (!lines[i]) lines[i] = new maps.Polyline({map:view,strokeColor:'#087cbd',strokeWeight:4});
-      lines[i].setPath(group.map(coords));
-    });
+    lines.forEach(line => line.setMap(null));
+    lines = routeSegments(list).map(({color,points:group}) => new maps.Polyline({
+      map:view,path:group.map(coords),strokeColor:color,strokeWeight:5
+    }));
     labels.forEach(label => label.setMap(null));
     labels = pins.map(pin => new maps.CustomOverlay({
       map:view,position:coords(pin.point),content:pinLabel(pin),clickable:Boolean(pin.eventId),
@@ -317,7 +391,15 @@ function kakaoMap(container, maps, center) {
     view.setDraggable?.(enabled);
     view.setZoomable?.(enabled);
     view.setKeyboardShortcuts?.(enabled);
+  }, cursor(point) {
+    if (!point) { cursorPin?.setMap(null); cursorPin = null; return; }
+    const pos = coords(point);
+    if (!cursorPin) cursorPin = new maps.CustomOverlay({map:view,position:pos,content:vehiclePin(),yAnchor:.5,zIndex:3});
+    else cursorPin.setPosition(pos);
+    if (!view.getBounds().contain(pos)) view.panTo(pos);
   }, focus(point) { view.setLevel?.(3); view.panTo(coords(point)); }, destroy() {
+    lines.forEach(line => line.setMap(null));
+    cursorPin?.setMap(null);
     labels.forEach(label => label.setMap(null));
     marker.setMap(null);
     container.replaceChildren();
@@ -360,23 +442,29 @@ async function lookupStop(point, key, lookupId) {
   } finally {
     stopLookups.delete(lookupId);
     if (!stopNames.has(lookupId)) stopNames.set(lookupId,null);
-    if (key === read('kakaoKey','') && currentStops.length) {
+    if (key === read('kakaoKey','') && (review || currentStops.length)) {
       renderStops();
       for (const event of timeline) {
         const detail = eventRows.get(event.id)?.querySelector('small');
-        if (event.kind === 'stop' && detail) detail.textContent = timelineDetail(event);
+        if (detail) detail.textContent = timelineDetail(event);
       }
+      updateUI();
     }
   }
 }
 
-function stopPlace(point,key) {
+// Building or address from Kakao, or '' until the lookup finishes (or without a Kakao key).
+function placeName(point,key = read('kakaoKey','')) {
   const coordinates = point.lat.toFixed(5)+', '+point.lng.toFixed(5);
   const lookupId = key+'|'+coordinates;
   if (key && !stopNames.has(lookupId) && !stopLookups.has(lookupId)) lookupStop(point,key,lookupId);
   const place = stopNames.get(lookupId);
   return place?.building ? place.building+' 인근'+(place.street ? ' · '+place.street : '')
-    : place?.street || 'GPS 좌표 '+coordinates;
+    : place?.street || '';
+}
+
+function stopPlace(point,key) {
+  return placeName(point,key) || 'GPS 좌표 '+point.lat.toFixed(5)+', '+point.lng.toFixed(5);
 }
 
 function renderStops() {
@@ -397,7 +485,11 @@ function timelineDetail(event) {
   if (event.kind === 'gap') return timelineClock(event.at,true)+' ~ '+timelineClock(event.until,true);
   if (event.kind === 'stop') return stopPlace(event.point,read('kakaoKey',''))
     +' · '+timelineClock(event.at,true)+' ~ '+timelineClock(event.until,true);
-  return 'GPS '+timelineClock(event.point.ts,true)+' · 정확도 ±'+Math.round(event.point.accuracy)+'m';
+  if (event.kind === 'speed') return '최고 '+Math.round(event.top)+' km/h · '
+    +timelineClock(event.at,true)+' ~ '+timelineClock(event.until,true)
+    +(placeName(event.point) ? ' · '+placeName(event.point) : '');
+  const place = event.kind === 'start' || event.kind === 'end' ? placeName(event.point) : '';
+  return (place ? place+' · ' : '')+'GPS '+timelineClock(event.point.ts,true)+' · 정확도 ±'+Math.round(event.point.accuracy)+'m';
 }
 
 function renderTimeline() {
@@ -442,7 +534,73 @@ function setMapInteraction(enabled) {
   map?.setInteractive?.(mapInteractive);
 }
 
+function renderReplay(status) {
+  $('replayToggle').textContent = replay ? '재생 정지' : '경로 재생';
+  $('replayToggle').setAttribute('aria-pressed',String(Boolean(replay)));
+  if (status !== undefined) $('replayStatus').textContent = status;
+}
+
+function stopReplay() {
+  if (!replay) return;
+  cancelAnimationFrame(replay.frame);
+  replay = undefined;
+  map?.cursor?.(null);
+  renderReplay('');
+}
+
+// Moves the vehicle along the saved route, faster than real time; GPS gaps are skipped.
+function startReplay() {
+  stopReplay();
+  const list = points, speeds = pointSpeeds(list);
+  if (list.length < 2 || !map?.cursor) return;
+  const run = replay = {index:0,time:list[0].ts,last:performance.now()};
+  const frame = now => {
+    if (replay !== run) return;
+    run.time += (now-run.last) * Number($('replaySpeed').value);
+    run.last = now;
+    let i = run.index;
+    while (i < list.length-1 && list[i+1].ts <= run.time) i++;
+    if (i < list.length-1 && list[i+1].ts-list[i].ts > 15000) run.time = list[++i].ts;
+    run.index = i;
+    const a = list[i], b = list[i+1];
+    const t = b ? Math.min(1,Math.max(0,(run.time-a.ts)/(b.ts-a.ts))) : 0;
+    map.cursor(b ? {lat:a.lat+(b.lat-a.lat)*t,lng:a.lng+(b.lng-a.lng)*t} : a);
+    const speed = b ? speeds[i]+(speeds[i+1]-speeds[i])*t : speeds[i];
+    if (!b) {
+      replay = undefined;
+      renderReplay('재생 끝 · '+timelineClock(a.ts,true));
+      return;
+    }
+    renderReplay(timelineClock(run.time,true)+' · '+Math.round(speed)+' km/h');
+    run.frame = requestAnimationFrame(frame);
+  };
+  run.frame = requestAnimationFrame(frame);
+  renderReplay();
+}
+
+function renderSpeedInfo() {
+  const show = Boolean(review && !review.parking && points.length > 1);
+  $('speedLegend').hidden = !show;
+  if (!show) { $('speedSummary').textContent = ''; return; }
+  const limit = speedLimit(), low = Math.min(30,limit), mid = Math.min(60,limit);
+  const legend = ['속도(km/h)',low+' 미만',low+'~'+mid,mid+'~'+limit,limit+' 이상 과속'].map((text,i) => {
+    const item = document.createElement('span');
+    if (i) item.style.setProperty('--speed',speedColors[i-1]);
+    item.textContent = text;
+    return item;
+  });
+  $('speedLegend').replaceChildren(...legend);
+  const speeds = pointSpeeds(points).filter((speed,i) => points[i].accuracy <= 30);
+  const hours = (new Date(review.end || points.at(-1).ts)-new Date(review.start)) / 3600000;
+  const overs = timeline.filter(event => event.kind === 'speed').length;
+  $('speedSummary').textContent = '최고 '+Math.round(Math.max(0,...speeds))+' km/h · 평균 '
+    +Math.round(hours > 0 ? kilometers(points)/hours : 0)+' km/h · '
+    +(overs ? '과속 '+overs+'회' : '과속 없음')+' (기준 '+limit+' km/h)';
+}
+
 function clearMap() {
+  stopReplay();
+  renderReplay('');
   mapGeneration++;
   map?.destroy();
   map = undefined;
@@ -455,6 +613,7 @@ function clearMap() {
   selectedEvent = pendingMapPoint = undefined;
   renderTimeline();
   renderStops();
+  renderSpeedInfo();
 }
 
 function drawMap(fit = false) {
@@ -464,6 +623,7 @@ function drawMap(fit = false) {
   timeline = review && !review.parking ? tripTimeline(review,points,currentStops) : [];
   renderTimeline();
   renderStops();
+  renderSpeedInfo();
   if (map) {
     map.update(points,fit,routePins(points));
     return;
@@ -482,12 +642,24 @@ function drawMap(fit = false) {
   loadKakao(key).then(maps => {
     if (generation !== mapGeneration) return;
     const last = points.at(-1);
+    stopReplay();
     map.destroy();
+    map = undefined;
     container.replaceChildren();
-    map = kakaoMap(container,maps,[last.lat,last.lng]);
+    try {
+      map = kakaoMap(container,maps,[last.lat,last.lng]);
+      map.update(points,fit || Boolean(review),routePins(points));
+    } catch (error) {
+      // The SDK loaded but could not draw (e.g. the map service is off for this key): keep OpenStreetMap.
+      try { map?.destroy(); } catch { /* Already broken. */ }
+      container.replaceChildren();
+      map = osmMap(container,[last.lat,last.lng]);
+      map.update(points,fit || Boolean(review),routePins(points));
+      setMapInteraction(mapInteractive);
+      throw error;
+    }
     setMapInteraction(mapInteractive);
     $('mapNote').textContent = '카카오맵';
-    map.update(points,fit || Boolean(review),routePins(points));
     if (pendingMapPoint) map.focus(pendingMapPoint);
   }).catch(() => {
     if (generation === mapGeneration) $('mapNote').textContent = '카카오맵 연결 실패 · OpenStreetMap 사용 중';
@@ -541,7 +713,9 @@ function updateUI() {
   $('metrics').textContent = review?.parking
     ? formatTime(last.ts)
     : duration(elapsed) + ' · ' + kilometers(points).toFixed(2) + ' km';
-  $('freshness').textContent = last
+  const parkedAt = review?.parking && last ? placeName(last) : '';
+  $('freshness').textContent = parkedAt ? parkedAt+' · 정확도 ±'+Math.round(last.accuracy)+'m'
+    : last
     ? (review ? '기록 위치 ' : '최근 위치 ') + new Date(last.ts).toLocaleTimeString('ko-KR') + ' · 정확도 ±' + Math.round(last.accuracy) + 'm'
     : active ? '휴대폰에서 받은 첫 위치를 기다립니다.' : '운행을 시작하면 GPS를 켭니다.';
   updateAwakeNote();
@@ -964,10 +1138,12 @@ $('overviewRoute').onclick = () => {
   applyTimelineSelection();
   $('timelineList').scrollTop = 0;
 };
+$('replayToggle').onclick = () => replay ? stopReplay() : startReplay();
 $('periodToday').onclick = () => { period = 'today'; showTotals(); };
 $('periodMonth').onclick = () => { period = 'month'; showTotals(); };
 $('settings').onclick = () => {
   $('mapKey').value = read('kakaoKey','');
+  $('speedLimit').value = speedLimit();
   $('code').value = code;
   $('code').disabled = Boolean(active);
   $('serverSettings').open = false;
@@ -986,8 +1162,14 @@ $('mapForm').onsubmit = event => {
     $('settingsError').textContent = '개인 기록 접근 코드 값을 확인해 주세요.';
     return;
   }
-  if (key !== read('kakaoKey','')) {
+  const limit = Number($('speedLimit').value);
+  if (!Number.isInteger(limit) || limit < 20 || limit > 200) {
+    $('settingsError').textContent = '과속 기준은 20~200 km/h 사이 정수로 입력해 주세요.';
+    return;
+  }
+  if (key !== read('kakaoKey','') || limit !== speedLimit()) {
     save('kakaoKey',key);
+    save('speedLimit',limit);
     clearMap();
     drawMap(Boolean(review));
   }
