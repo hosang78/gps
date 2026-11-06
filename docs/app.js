@@ -18,7 +18,7 @@ let selected = active?.vehicle || cars[0][0];
 let records = read('gpsRecords',[]);
 const parkingByVehicle = read('parkingByVehicle',{});
 let points = active?.points || [];
-let code = sessionStorage.getItem(prefix+'code') || '';
+let code = read('code','') || sessionStorage.getItem(prefix+'code') || '';
 let cloudRecords = [], review, busy = false, syncTask, map, mapGeneration = 0;
 let period = 'today', reviewRequest = 0;
 let watchId, sampler, syncTimer, clock, latest;
@@ -806,11 +806,33 @@ function saveRecords() {
 
 const pendingTrips = () => records.filter(trip => trip.server && !trip.synced);
 
+// The server accepts times from the last 7 days; keep an hour of margin for slow uploads.
+const localOnly = () => records.filter(trip => !trip.server && trip.end && trip.points?.length);
+const uploadable = trip => new Date(trip.start).getTime() > Date.now()-7*86400000+3600000;
+
 function showSyncState() {
   const pending = pendingTrips().length, note = $('syncState');
   note.hidden = !pending;
   note.textContent = '서버 전송 대기 ' + pending + '건'
     + (code ? (syncTask ? ' · 전송 중' : '') : ' · 설정에서 접근 코드를 입력하면 전송됩니다');
+  const local = localOnly(), ready = local.filter(uploadable).length, old = local.length-ready;
+  $('localOnly').hidden = !local.length;
+  $('localOnlyText').textContent = '이 기기에만 있는 운행 '+local.length+'건'
+    + (old ? ' (7일 지난 '+old+'건은 보낼 수 없음)' : '')
+    + (ready && !code ? ' · 설정에서 접근 코드를 입력하면 서버로 보낼 수 있습니다' : '');
+  $('uploadLocal').hidden = !code || !ready;
+  $('uploadLocal').disabled = Boolean(active || syncTask);
+}
+
+async function uploadLocal() {
+  if (!code || active) return;
+  const tag = await codeTag(code);
+  for (const trip of localOnly().filter(uploadable)) {
+    Object.assign(trip,{server:true,codeTag:tag,registered:false,sent:0,synced:false});
+  }
+  saveRecords();
+  showRecords();
+  sync();
 }
 
 function sync() {
@@ -954,9 +976,12 @@ function action() {
 
 function tripRows() {
   const remoteOnly = cloudRecords.filter(row => !records.some(trip => trip.id === row.id))
-    .map(row => ({id:row.id,vehicle:row.vehicle_id,start:row.started_at,end:row.ended_at}));
+    .map(row => ({id:row.id,vehicle:row.vehicle_id,start:row.started_at,end:row.ended_at,
+      distance:Number.isFinite(row.distance_km) ? row.distance_km : undefined}));
   return [...records,...remoteOnly].sort((a,b) => new Date(b.start)-new Date(a.start));
 }
+
+const tripKm = row => row.points ? kilometers(row.points) : row.distance;
 
 function showTotals() {
   const now = new Date();
@@ -965,13 +990,14 @@ function showTotals() {
     ? new Date(now.getFullYear(),now.getMonth(),now.getDate()+1)
     : new Date(now.getFullYear(),now.getMonth()+1,1);
   let count = 0, distance = 0, time = 0;
-  for (const trip of records) {
+  for (const trip of tripRows()) {
     const start = new Date(trip.start);
-    if (!trip.end || !trip.points?.length || !(start >= from && start < to)) continue;
+    if (!trip.end || trip.points && !trip.points.length || !(start >= from && start < to)) continue;
     count++;
-    distance += kilometers(trip.points);
+    distance += tripKm(trip) || 0;
     time += Math.max(0,new Date(trip.end)-start);
   }
+  $('totalsNote').textContent = (cloudRecords.length ? '이 기기와 서버에 저장된' : '이 기기에 저장된')+' GPS 운행 · 시작 시각 기준';
   const secs = Math.floor(time/1000), mins = Math.floor(secs/60);
   $('totalTrips').textContent = count + '회';
   $('totalDistance').textContent = distance.toFixed(2) + ' km';
@@ -1041,7 +1067,7 @@ function showRecords() {
     button.disabled = Boolean(active);
     title.textContent = name(row.vehicle) + ' · ' + formatTime(row.start);
     detail.textContent = (row.end ? duration(new Date(row.end)-new Date(row.start)) : '종료 기록 없음')
-      + (row.points ? ' · '+kilometers(row.points).toFixed(2)+' km' : '')
+      + (tripKm(row) !== undefined ? ' · '+tripKm(row).toFixed(2)+' km' : '')
       + (local ? '' : ' · 서버 기록');
     button.append(title,detail);
     if (local && row.server && !row.synced) {
@@ -1139,6 +1165,7 @@ $('overviewRoute').onclick = () => {
   $('timelineList').scrollTop = 0;
 };
 $('replayToggle').onclick = () => replay ? stopReplay() : startReplay();
+$('uploadLocal').onclick = uploadLocal;
 $('periodToday').onclick = () => { period = 'today'; showTotals(); };
 $('periodMonth').onclick = () => { period = 'month'; showTotals(); };
 $('settings').onclick = () => {
@@ -1175,7 +1202,9 @@ $('mapForm').onsubmit = event => {
   }
   if (!active && token !== code) {
     code = token;
-    sessionStorage.setItem(prefix+'code',code);
+    if (code) save('code',code);
+    else localStorage.removeItem(prefix+'code');
+    sessionStorage.removeItem(prefix+'code');
     cloudRecords = [];
     showRecords();
     refreshCloud();

@@ -159,3 +159,4 @@ button.route-pin { cursor: pointer; }
 #replayStatus { color: #173e65; font-size: .75rem; font-weight: 720; font-variant-numeric: tabular-nums; }
 .canvas-cursor { position: absolute; z-index: 2; transform: translate(-50%,-50%); }
 dialog .field-gap { margin-top: 10px; }
+.local-only { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; margin-top: 5px; padding: 5px 8px; border-radius: 7px; background: #eef5fc; color: #1e4a73; font-size: .74rem; font-weight: 700; }

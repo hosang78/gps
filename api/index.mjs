@@ -22,14 +22,25 @@ export default async function handler(request) {
   const code = request.headers.get('authorization')?.match(/^Bearer ([a-zA-Z0-9_-]{20,80})$/)?.[1];
   if (!code) return reply({ error: '시연 코드를 입력해 주세요.' }, 401);
   const hash = createHash('sha256').update(code).digest();
-  const hashes = (process.env.FLEET_CODE_HASHES || '').split(',');
-  const index = hashes.findIndex(item => /^[a-f0-9]{64}$/.test(item) && timingSafeEqual(hash, Buffer.from(item, 'hex')));
-  if (index < 0) return reply({ error: '시연 코드를 확인해 주세요.' }, 401);
-  const owner = 'participant-' + (index + 1);
+  const match = list => (list || '').split(',')
+    .findIndex(item => /^[a-f0-9]{64}$/.test(item) && timingSafeEqual(hash, Buffer.from(item, 'hex')));
+  // Codes added later live in a second variable, so the original list never has to be rewritten.
+  const index = match(process.env.FLEET_CODE_HASHES), extra = index < 0 ? match(process.env.FLEET_EXTRA_CODE_HASHES) : -1;
+  if (index < 0 && extra < 0) return reply({ error: '시연 코드를 확인해 주세요.' }, 401);
+  const owner = index >= 0 ? 'participant-' + (index + 1) : 'owner-' + (extra + 1);
   try {
     const sql = neon(process.env.FLEET_DATABASE_URL);
     if (request.method === 'GET' && path === '/trips') {
-      const trips = await sql`SELECT t.id, t.vehicle_id, t.started_at, t.ended_at, v.label
+      // Distance follows the app: points more than 15 seconds apart are not joined.
+      const trips = await sql`SELECT t.id, t.vehicle_id, t.started_at, t.ended_at, v.label,
+          COALESCE((SELECT round((sum(step) / 1000)::numeric, 3)::float8 FROM (
+            SELECT CASE WHEN recorded_at - lag(recorded_at) OVER w <= interval '15 seconds' THEN
+              12742000 * asin(least(1, sqrt(
+                sin(radians(latitude - lag(latitude) OVER w) / 2) ^ 2 +
+                cos(radians(lag(latitude) OVER w)) * cos(radians(latitude)) *
+                sin(radians(longitude - lag(longitude) OVER w) / 2) ^ 2)))
+            END AS step
+            FROM fleet_demo.trip_points WHERE trip_id = t.id WINDOW w AS (ORDER BY seq)) steps), 0) AS distance_km
         FROM fleet_demo.trips t JOIN fleet_demo.vehicles v ON v.id = t.vehicle_id
         WHERE participant = ${owner} ORDER BY started_at DESC LIMIT 30`;
       return reply({ trips });
